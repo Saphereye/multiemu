@@ -1,380 +1,388 @@
-extern crate minifb;
-
-use minifb::{Key, Window, WindowOptions};
-use rand::Rng;
-use std::fmt;
+use lazy_static::lazy_static;
+use std::collections::HashMap;
 use std::fs::File;
-use std::io::BufReader;
-use std::io::Read;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::io::{self, Read};
 
-struct CPU {
+use minifb::{Key, Scale, Window, WindowOptions};
+
+const WIDTH: usize = 64;
+const HEIGHT: usize = 32;
+
+lazy_static! {
+    static ref FONT_SET: Vec<u8> = vec![
+        0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+        0x20, 0x60, 0x20, 0x20, 0x70, // 1
+        0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+        0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+        0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+        0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
+        0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
+        0xF0, 0x10, 0x20, 0x40, 0x40, // 7
+        0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+        0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+        0xF0, 0x90, 0xF0, 0x90, 0x90, // A
+        0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
+        0xF0, 0x80, 0x80, 0x80, 0xF0, // C
+        0xE0, 0x90, 0x90, 0x90, 0xE0, // D
+        0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
+        0xF0, 0x80, 0xF0, 0x80, 0x80  // F
+    ];
+
+    static ref KEY_MAP: HashMap<u8, Key> = HashMap::from([
+        (0x0, Key::X),
+        (0x1, Key::Key1),
+        (0x2, Key::Key2),
+        (0x3, Key::Key3),
+        (0x4, Key::Q),
+        (0x5, Key::W),
+        (0x6, Key::E),
+        (0x7, Key::A),
+        (0x8, Key::S),
+        (0x9, Key::D),
+        (0xA, Key::Z),
+        (0xB, Key::C),
+        (0xC, Key::Key4),
+        (0xD, Key::R),
+        (0xE, Key::F),
+        (0xF, Key::V)
+    ]);
+
+}
+
+const PROGRAM_START_ADDRESS: u16 = 0x200;
+const FONTSET_START_ADDRESS: u16 = 0x50;
+
+struct Cpu {
+    registers: Vec<u8>,
     memory: Vec<u8>,
-    display: Vec<bool>,
+    index_register: u16,
     program_counter: u16,
-    stack_pointer: u16,
-    i: u16,
-    function_stack: Vec<u16>,
+    stack: Vec<u16>, // 16 levels
+    stack_pointer: u8,
     delay_timer: u8,
     sound_timer: u8,
-    v: Vec<u8>,
+    input_keys: Vec<bool>,         // true of nth key is pressed
+    monochrome_display: Vec<bool>, // true if pixel is on
+    current_opcode: u16,
 }
 
-impl fmt::Debug for CPU {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CPU")
-            .field("memory", &"...")
-            .field("display", &"...")
-            .field("program_counter", &format!("{:x}", self.program_counter))
-            .field("i", &format!("{:x}", self.i))
-            .field("function_stack", &"...")
-            .field("delay_timer", &format!("{:x}", self.delay_timer))
-            .field("sound_timer", &format!("{:x}", self.sound_timer))
-            .field("v0", &format!("{:x}", self.v[0x0]))
-            .field("v1", &format!("{:x}", self.v[0x1]))
-            .field("v2", &format!("{:x}", self.v[0x2]))
-            .field("v3", &format!("{:x}", self.v[0x3]))
-            .field("v4", &format!("{:x}", self.v[0x4]))
-            .field("v5", &format!("{:x}", self.v[0x5]))
-            .field("v6", &format!("{:x}", self.v[0x6]))
-            .field("v7", &format!("{:x}", self.v[0x7]))
-            .field("v8", &format!("{:x}", self.v[0x8]))
-            .field("v9", &format!("{:x}", self.v[0x9]))
-            .field("va", &format!("{:x}", self.v[0xa]))
-            .field("vb", &format!("{:x}", self.v[0xb]))
-            .field("vc", &format!("{:x}", self.v[0xc]))
-            .field("vd", &format!("{:x}", self.v[0xd]))
-            .field("ve", &format!("{:x}", self.v[0xe]))
-            .field("vf", &format!("{:x}", self.v[0xf]))
-            .finish()
-    }
-}
-
-impl CPU {
+impl Default for Cpu {
     fn default() -> Self {
-        let fontset: Vec<u8> = vec![
-            0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
-            0x20, 0x60, 0x20, 0x20, 0x70, // 1
-            0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
-            0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
-            0x90, 0x90, 0xF0, 0x10, 0x10, // 4
-            0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
-            0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
-            0xF0, 0x10, 0x20, 0x40, 0x40, // 7
-            0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
-            0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
-            0xF0, 0x90, 0xF0, 0x90, 0x90, // A
-            0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
-            0xF0, 0x80, 0x80, 0x80, 0xF0, // C
-            0xE0, 0x90, 0x90, 0x90, 0xE0, // D
-            0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
-            0xF0, 0x80, 0xF0, 0x80, 0x80, // F
-        ];
-
         let mut memory = vec![0; 4096];
-        memory[0..fontset.len()].copy_from_slice(&fontset);
-
+        memory[FONTSET_START_ADDRESS as usize
+            ..(FONTSET_START_ADDRESS + FONT_SET.len() as u16) as usize]
+            .copy_from_slice(&FONT_SET);
         Self {
-            memory: memory,
-            display: vec![false; 64 * 32],
-            program_counter: 0,
+            registers: vec![0; 16],
+            memory,
+            index_register: 0,
+            program_counter: PROGRAM_START_ADDRESS,
+            stack: vec![0; 16],
             stack_pointer: 0,
-            i: 0,
-            function_stack: Vec::new(),
             delay_timer: 0,
             sound_timer: 0,
-            v: vec![0; 16],
+            input_keys: vec![false; 16],
+            monochrome_display: vec![false; 64 * 32],
+            current_opcode: 0,
         }
     }
+}
 
-    fn get_display(&self) -> Vec<u32> {
-        return self
-            .display
-            .iter()
-            .map(|&b| if b { 0xFFFFFF } else { 0 })
-            .collect();
+impl Cpu {
+    fn load_rom(&mut self, file_path: &str) -> io::Result<()> {
+        let mut file = File::open(file_path)?;
+        file.read(&mut self.memory[PROGRAM_START_ADDRESS as usize..])?;
+        Ok(())
     }
 
-    fn print_memory(&self) {
-        for (i, chunk) in self.memory.chunks(16).enumerate() {
-            print!("{:04X}: ", i * 16);
-            for &value in chunk {
-                print!("{:02X} ", value);
+    fn parse_opcode(&mut self, opcode: u16) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        let y = ((opcode & 0x00F0) >> 4) as usize;
+        match opcode {
+            0x00E0 => {
+                // CLS, clear display
+                self.monochrome_display = vec![false; 64 * 32];
             }
-            println!();
+            0x00EE => {
+                // RET, return from subroutine
+                self.stack_pointer -= 1;
+                self.program_counter = self.stack[self.stack_pointer as usize];
+            }
+            0x1000..=0x1FFF => {
+                // JP addr, target address = opcode & 0x0FFF
+                self.program_counter = opcode & 0x0FFF;
+            }
+            0x2000..=0x2FFF => {
+                // CALL addr, target address = opcode & 0x0FFF
+                self.stack[self.stack_pointer as usize] = self.program_counter;
+                self.stack_pointer += 1;
+                self.program_counter = opcode & 0x0FFF;
+            }
+            0x3000..=0x3FFF => {
+                // SE Vx, byte, skip next instruction if Vx == byte
+                let byte = (opcode & 0x00FF) as u8;
+                if self.registers[x] == byte {
+                    self.program_counter += 2;
+                }
+            }
+            0x4000..=0x4FFF => {
+                // SNE Vx, byte, skip next instruction if Vx != byte
+                let byte = (opcode & 0x00FF) as u8;
+                if self.registers[x] != byte {
+                    self.program_counter += 2;
+                }
+            }
+            0x5000..=0x5FFF => {
+                // SE Vx, Vy, skip next instruction if Vx == Vy
+                if self.registers[x] == self.registers[y] {
+                    self.program_counter += 2;
+                }
+            }
+            0x6000..=0x6FFF => {
+                // LD Vx, byte, Vx = byte
+                let byte = (opcode & 0x00FF) as u8;
+                self.registers[x] = byte;
+            }
+            0x7000..=0x7FFF => {
+                // ADD Vx, byte, Vx += byte
+                let byte = (opcode & 0x00FF) as u8;
+                self.registers[x] = self.registers[x].wrapping_add(byte);
+            }
+            0x8000..=0x8FFF => {
+                match opcode & 0x000F {
+                    0x0 => {
+                        // LD Vx, Vy, Vx = Vy
+                        self.registers[x] = self.registers[y];
+                    }
+                    0x1 => {
+                        // OR Vx, Vy, Vx |= Vy
+                        self.registers[x] |= self.registers[y];
+                    }
+                    0x2 => {
+                        // AND Vx, Vy, Vx &= Vy
+                        self.registers[x] &= self.registers[y];
+                    }
+                    0x3 => {
+                        // XOR Vx, Vy, Vx ^= Vy
+                        self.registers[x] ^= self.registers[y];
+                    }
+                    0x4 => {
+                        // ADD Vx, Vy, Vx += Vy, VF = carry
+                        let (result, overflow) =
+                            self.registers[x].overflowing_add(self.registers[y]);
+                        self.registers[x] = result;
+                        self.registers[0xF] = overflow as u8;
+                    }
+                    0x5 => {
+                        // SUB Vx, Vy, Vx -= Vy, VF = !borrow
+                        let (result, overflow) =
+                            self.registers[x].overflowing_sub(self.registers[y]);
+                        self.registers[x] = result;
+                        self.registers[0xF] = !overflow as u8;
+                    }
+                    0x6 => {
+                        // SHR Vx {, Vy}, Vx >>= 1, VF = carry
+                        self.registers[0xF] = self.registers[x] & 0x1;
+                        self.registers[x] >>= 1;
+                    }
+                    0x7 => {
+                        // SUBN Vx, Vy, Vx = Vy - Vx, VF = !borrow
+                        let (result, overflow) =
+                            self.registers[y].overflowing_sub(self.registers[x]);
+                        self.registers[x] = result;
+                        self.registers[0xF] = !overflow as u8;
+                    }
+                    0xE => {
+                        // SHL Vx {, Vy}, Vx <<= 1, VF = carry
+                        self.registers[0xF] = (self.registers[x] & 0x80) >> 7;
+                        self.registers[x] <<= 1;
+                    }
+                    _ => unimplemented!("opcode {:X}", opcode),
+                }
+            }
+            0x9000..=0x9FFF => {
+                // SNE Vx, Vy, skip next instruction if Vx != Vy
+                if self.registers[x] != self.registers[y] {
+                    self.program_counter += 2;
+                }
+            }
+            0xA000..=0xAFFF => {
+                // LD I, addr, I = addr
+                self.index_register = opcode & 0x0FFF;
+            }
+            0xB000..=0xBFFF => {
+                // JP V0, addr, PC = V0 + addr
+                self.program_counter = self.registers[0] as u16 + (opcode & 0x0FFF);
+            }
+            0xC000..=0xCFFF => {
+                // RND Vx, byte, Vx = rand() & byte
+                let byte = (opcode & 0x00FF) as u8;
+                self.registers[x] = rand::random::<u8>() & byte;
+            }
+            0xD000..=0xDFFF => {
+                // DRW Vx, Vy, nibble, draw sprite at (Vx, Vy) with height nibble
+                // VF = collision
+                let height = (opcode & 0x000F) as usize;
+                let x_pos = self.registers[x] % WIDTH as u8;
+                let y_pos = self.registers[y] % HEIGHT as u8;
+
+                self.registers[0xF] = 0;
+
+                for row in 0..height {
+                    let sprite_byte = self.memory[self.index_register as usize + row];
+                    for col in 0..8 {
+                        let sprite_pixel = sprite_byte & (0x80 >> col);
+                        let screen_pixel = &mut self.monochrome_display
+                            [(y_pos as usize + row) * WIDTH + (x_pos as usize + col)];
+
+                            if sprite_pixel != 0 {
+                                if *screen_pixel {
+                                    self.registers[0xF] = 1;
+                                }
+
+                                *screen_pixel = !*screen_pixel;
+                            }
+                    }
+                }
+            }
+            0xE000..=0xEFFF => {
+                match opcode & 0x00FF {
+                    0x9E => {
+                        // SKP Vx, skip next instruction if key Vx is pressed
+                        if self.input_keys[self.registers[x] as usize] {
+                            self.program_counter += 2;
+                        }
+                    }
+                    0xA1 => {
+                        // SKP Vx, skip next instruction if key Vx is NOT pressed
+                        if !self.input_keys[self.registers[x] as usize] {
+                            self.program_counter += 2;
+                        }
+                    }
+                    _ => unimplemented!("opcode {:X}", opcode),
+                }
+            }
+            0xF000..=0xFFFF => {
+                match opcode & 0x00FF {
+                    0x07 => {
+                        // LD Vx, DT, Set Vx = delay timer value.
+                        self.registers[x] = self.delay_timer
+                    }
+                    0x0A => {
+                        // Fx0A - LD Vx, K, Wait for a key press, store the value of the key in Vx.
+                        'input_checker: loop {
+                            for index in 0..16 {
+                                if self.input_keys[index] {
+                                    self.registers[x] = index as u8;
+                                    break 'input_checker;
+                                }
+                            }
+                            self.program_counter -= 2;
+                        }
+                    }
+                    0x15 => {
+                        // LD DT, Vx, Set delay timer = Vx.
+                        self.delay_timer = self.registers[x];
+                    }
+                    0x18 => {
+                        // LD ST, Vx, Set sound timer = Vx.
+                        self.sound_timer = self.registers[x];
+                    }
+                    0x1E => {
+                        // ADD I, Vx, Set I = I + Vx.
+                        self.index_register += self.registers[x] as u16;
+                    }
+                    0x29 => {
+                        // LD F, Vx, Set I = location of sprite for digit Vx.
+                        self.index_register = FONTSET_START_ADDRESS + self.registers[x] as u16 * 5;
+                    }
+                    0x33 => {
+                        // LD B, Vx, Store BCD representation of Vx in memory locations I, I+1, and I+2.
+                        // The interpreter takes the decimal value of Vx, and places the hundreds digit in memory at location in I, the tens digit at location I+1, and the ones digit at location I+2.
+                        let mut value = self.registers[x];
+
+                        self.memory[self.index_register as usize + 2] = value % 10; // Ones
+                        value /= 10;
+
+                        self.memory[self.index_register as usize + 1] = value % 10; // Tens
+                        value /= 10;
+
+                        self.memory[self.index_register as usize] = value % 10;
+                        // Hundreds
+                    }
+                    0x55 => {
+                        // LD [I], Vx, Store registers V0 through Vx in memory starting at location I.
+                        for index in 0..=x {
+                            self.memory[self.index_register as usize + index] =
+                                self.registers[index];
+                        }
+                    }
+                    0x65 => {
+                        // LD Vx, [I], Read registers V0 through Vx from memory starting at location I.
+                        for index in 0..=x {
+                            self.registers[index] =
+                                self.memory[self.index_register as usize + index];
+                        }
+                    }
+                    _ => unimplemented!("opcode {:X}", opcode),
+                }
+            }
+            _ => unimplemented!("opcode {:X}", opcode),
         }
+    }
+
+    fn cycle(&mut self) {
+        self.current_opcode = (self.memory[self.program_counter as usize] as u16) << 8
+            | self.memory[self.program_counter as usize + 1] as u16;
+        self.program_counter += 2;
+        self.parse_opcode(self.current_opcode);
+
+        if self.delay_timer > 0 {
+            self.delay_timer -= 1;
+        }
+
+        if self.sound_timer > 0 {
+            self.sound_timer -= 1;
+        }
+    }
+
+    fn get_buffer(&mut self) -> &mut Vec<bool> {
+        &mut self.monochrome_display
     }
 }
 
 fn main() {
-    println!("Starting.");
-    // Dimensions of the window
-    let width = 64;
-    let height = 32;
-    let scaling = 5;
-    let target_frequency_hz = 60;
-    let iteration_duration = Duration::from_micros(1_000_000 / target_frequency_hz);
+    let mut cpu = Cpu::default();
+    cpu.load_rom("roms/test_opcode.ch8").unwrap();
 
-    // Create a new window
     let mut window = Window::new(
-        "Pixel Grid",
-        width * scaling,
-        height * scaling,
+        "Test - ESC to exit",
+        WIDTH,
+        HEIGHT,
         WindowOptions {
-            borderless: false,
-            title: true,
-            resize: true,
-            scale: minifb::Scale::X4,
-            scale_mode: minifb::ScaleMode::Stretch,
-            topmost: false,
+            scale: Scale::X16,
+            ..WindowOptions::default()
         },
     )
     .unwrap_or_else(|e| {
         panic!("{}", e);
     });
 
-    let mut cpu = CPU::default();
+    window.limit_update_rate(Some(std::time::Duration::from_micros(16600)));
 
-    // Draw the grid
-    for y in 0..height {
-        for x in 0..width {
-            // Calculate the index in the buffer
-            let index = y * width + x;
-
-            // Color the pixels to form the grid pattern
-            if (x + y) % 2 == 0 {
-                cpu.display[index] = true; // White color
-            }
-        }
-    }
-
-    // Open the CHIP-8 source file
-    let file_path = "src/IBM Logo.ch8";
-    let mut file = File::open(file_path).expect("Failed to open file");
-
-    // Read the contents of the file into a Vec<u8>
-    let mut file_contents: Vec<u8> = Vec::new();
-    file.read_to_end(&mut file_contents)
-        .expect("Failed to read file");
-
-    // Convert Vec<u8> to Vec<u16>
-    let mut program: Vec<u16> = Vec::new();
-    let mut i = 0;
-    while i < file_contents.len() {
-        let opcode = ((file_contents[i] as u16) << 8) | (file_contents[i + 1] as u16);
-        program.push(opcode);
-        i += 2;
-    }
-
-    let instructions: Vec<u16> = program;
-    // let instructions: Vec<u16> = vec![0x00e0, ];
-
-    // Set up the main loop
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        thread::sleep(iteration_duration);
-        println!("{:?}", cpu);
-        // // Clear the buffer to black
-        // buffer.iter_mut().for_each(|pixel| *pixel = 0);
-
-        if cpu.program_counter as usize >= instructions.len() {
-            break;
-        }
-        // println!(
-        //     "{:?}",
-        //     (
-        //         (instructions[cpu.program_counter] & 0xF000) >> 12,
-        //         (instructions[cpu.program_counter] & 0x0F00) >> 8,
-        //         (instructions[cpu.program_counter] & 0x00F0) >> 4,
-        //         (instructions[cpu.program_counter] & 0x000F)
-        //     )
-        // );
-
-        let opcode = instructions[cpu.program_counter as usize];
-
-        print!("{:x}: ", opcode);
-
-        // todo: need to deal with carry flag
-
-        match (opcode & 0xF000) >> 12 {
-            0x0 => {
-                let nnn = opcode & 0x0FFF;
-                match nnn {
-                    // Nested match on the value of nnn
-                    0x0E0 => {
-                        cpu.display = vec![false; width * height];
-                        println!("CLS")
-                    }
-                    0x0EE => {
-                        cpu.program_counter = match cpu.function_stack.last() {
-                            Some(a) => *a,
-                            _ => 0,
-                        };
-                        cpu.stack_pointer -= 1;
-                        println!("RET")
-                    }
-                    _ => {
-                        println!("NOOP");
-                        // println!("Execute machine language subroutine at {}", nnn)
-                    }
-                }
-            }
-            0x1 => {
-                let nnn = opcode & 0x0FFF;
-                cpu.program_counter = nnn;
-                println!("JP {:x}", nnn);
-                continue;
-            }
-            0x2 => {
-                let nnn = opcode & 0x0FFF;
-                cpu.stack_pointer += 1;
-                cpu.function_stack.push(cpu.program_counter);
-                cpu.program_counter = nnn;
-                println!("CALL {:x}", nnn);
-                continue;
-            }
-            0x3 => {
-                let x = ((opcode & 0x0F00) >> 8) as usize;
-                let kk = opcode & 0x00FF;
-                if cpu.v[x] == kk as u8 {
-                    cpu.program_counter += 1;
-                }
-                println!("SE V{:x}, {:x}", x, kk);
-            }
-            0x4 => {
-                let x = ((opcode & 0x0F00) >> 8) as usize;
-                let kk = opcode & 0x00FF;
-                if cpu.v[x] != kk as u8 {
-                    cpu.program_counter += 1;
-                }
-                println!("SNE V{:x}, {:x}", x, kk);
-            }
-            0x5 => {
-                let x = ((opcode & 0x0F00) >> 8) as usize;
-                let y = ((opcode & 0x00F0) >> 8) as usize;
-                if cpu.v[x] == cpu.v[y] {
-                    cpu.program_counter += 1;
-                }
-                println!("SE V{:x}, V{:x}", x, y);
-            }
-            0x6 => {
-                let x = ((opcode & 0x0F00) >> 8) as usize;
-                let kk = opcode & 0x00FF;
-                cpu.v[x] = kk as u8;
-                println!("LD V{:x}, {:x}", x, kk);
-            }
-            0x7 => {
-                let x = ((opcode & 0x0F00) >> 8) as usize;
-                let kk = opcode & 0x00FF;
-                cpu.v[x] += kk as u8;
-                println!("ADD V{:x}, {:x}", x, kk);
-            }
-            // todo: set the carry flags accordingly for 8xxx
-            0x8 => match opcode & 0x000F {
-                0x0 => {
-                    let x = ((opcode & 0x0F00) >> 8) as usize;
-                    let y = ((opcode & 0x00F0) >> 8) as usize;
-                    cpu.v[x] = cpu.v[y];
-                    println!("LD V{:x}, V{:x}", x, y);
-                }
-                0x1 => {
-                    let x = ((opcode & 0x0F00) >> 8) as usize;
-                    let y = ((opcode & 0x00F0) >> 8) as usize;
-                    cpu.v[x] |= cpu.v[y];
-                    println!("OR V{:x}, V{:x}", x, y);
-                }
-                0x2 => {
-                    let x = ((opcode & 0x0F00) >> 8) as usize;
-                    let y = ((opcode & 0x00F0) >> 8) as usize;
-                    cpu.v[x] &= cpu.v[y];
-                    println!("AND V{:x}, V{:x}", x, y);
-                }
-                0x3 => {
-                    let x = ((opcode & 0x0F00) >> 8) as usize;
-                    let y = ((opcode & 0x00F0) >> 8) as usize;
-                    cpu.v[x] ^= cpu.v[y];
-                    println!("XOR V{:x}, V{:x}", x, y);
-                }
-                0x4 => {
-                    let x = ((opcode & 0x0F00) >> 8) as usize;
-                    let y = ((opcode & 0x00F0) >> 8) as usize;
-                    cpu.v[x] += cpu.v[y];
-                    println!("ADD V{:x}, V{:x}", x, y);
-                }
-                0x5 => {
-                    let x = ((opcode & 0x0F00) >> 8) as usize;
-                    let y = ((opcode & 0x00F0) >> 8) as usize;
-                    cpu.v[x] -= cpu.v[y];
-                    println!("SUB V{:x}, V{:x}", x, y);
-                }
-                0x6 => {
-                    let x = ((opcode & 0x0F00) >> 8) as usize;
-                    let y = ((opcode & 0x00F0) >> 8) as usize;
-                    cpu.v[x] >>= 1;
-                    println!("SHR V{:x}, V{:x}", x, y);
-                }
-                0x7 => {
-                    let x = ((opcode & 0x0F00) >> 8) as usize;
-                    let y = ((opcode & 0x00F0) >> 8) as usize;
-                    cpu.v[x] = cpu.v[y] - cpu.v[x];
-                    println!("SUBN V{:x}, V{:x}", x, y);
-                }
-                0xE => {
-                    let x = ((opcode & 0x0F00) >> 8) as usize;
-                    let y = ((opcode & 0x00F0) >> 8) as usize;
-                    cpu.v[x] <<= 1;
-                    println!("SHL V{:x}, V{:x}", x, y);
-                }
-                _ => println!("Unknow opcode ({:x})", opcode),
-            },
-            0x9 => {
-                let x = ((opcode & 0x0F00) >> 8) as usize;
-                let y = ((opcode & 0x00F0) >> 8) as usize;
-                if cpu.v[x] != cpu.v[y] {
-                    cpu.program_counter += 1;
-                }
-                println!("SNE V{:x}, V{:x}", x, y);
-            }
-            0xA => {
-                let nnn = opcode & 0x0FFF;
-                cpu.i = nnn;
-                println!("LD I, {:x}", nnn);
-            }
-            0xB => {
-                let nnn = opcode & 0x0FFF;
-                cpu.program_counter = cpu.v[0] as u16 + nnn;
-                println!("JP V0, {:x}", nnn);
-            }
-            0xC => {
-                let x = ((opcode & 0x0F00) >> 8) as usize;
-                let kk = opcode & 0x00FF;
-                let mut rng = rand::thread_rng();
-                let random_byte: u8 = rng.gen();
-                cpu.v[x] = random_byte & kk as u8;
-                println!("RND V{:x}, {:x}", x, kk);
-            }
-            // More cases for other opcodes...
-            _ => println!("Unknown opcode ({:x})", opcode),
+        for (key, value) in KEY_MAP.iter() {
+            cpu.input_keys[*key as usize] = window.is_key_down(*value);
         }
 
-        // Update the window with the new buffer
-        window
-            .update_with_buffer(&cpu.get_display(), width, height)
-            .unwrap();
+        cpu.cycle();
 
-        cpu.program_counter += 1;
-
-        // // Handle window events
-        // if let Some(keys) = window.get_keys() {
-        //     for key in keys {
-        //         match key {
-        //             Key::Escape => break,
-        //             _ => {}
-        //         }
-        //     }
-        // }
+        // We unwrap here as we want this code to exit if it fails. Real applications may want to handle this in a different way
+        let buffer: Vec<u32> = cpu
+            .get_buffer()
+            .iter_mut()
+            .map(|&mut b| if b { 0xFFFFFF } else { 0 })
+            .collect();
+        window.update_with_buffer(&buffer, WIDTH, HEIGHT).unwrap();
     }
-    println!("{:?}", cpu);
-    cpu.print_memory();
-    println!("Bye Bye.");
 }
