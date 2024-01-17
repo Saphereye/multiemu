@@ -9,6 +9,7 @@ const WIDTH: usize = 64;
 const HEIGHT: usize = 32;
 
 lazy_static! {
+    /// The CHIP-8 font set.
     static ref FONT_SET: Vec<u8> = vec![
         0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
         0x20, 0x60, 0x20, 0x20, 0x70, // 1
@@ -28,6 +29,7 @@ lazy_static! {
         0xF0, 0x80, 0xF0, 0x80, 0x80  // F
     ];
 
+    /// Maps the CHIP-8 keypad to the keyboard.
     static ref KEY_MAP: HashMap<u8, Key> = HashMap::from([
         (0x0, Key::X),
         (0x1, Key::Key1),
@@ -52,6 +54,7 @@ lazy_static! {
 const PROGRAM_START_ADDRESS: u16 = 0x200;
 const FONTSET_START_ADDRESS: u16 = 0x50;
 
+/// Implementation of the Chip-8 CPU
 struct Cpu {
     registers: Vec<u8>,
     memory: Vec<u8>,
@@ -67,6 +70,10 @@ struct Cpu {
 }
 
 impl Default for Cpu {
+    /// Initialize the CPU with default values.
+    ///
+    /// The program counter is set to 0x200, the start address of the program. 
+    /// All registers are set to 0 and the monochrome display is cleared.
     fn default() -> Self {
         let mut memory = vec![0; 4096];
         memory[FONTSET_START_ADDRESS as usize
@@ -89,12 +96,27 @@ impl Default for Cpu {
 }
 
 impl Cpu {
+    /// Loads the ROM into memory starting at 0x200 given file name.
+    /// 
+    /// # Examples
+    /// ```
+    /// let mut cpu = Cpu::default();
+    /// cpu.load_rom("roms/tetris.ch8").unwrap();
+    /// 
+    /// println!("{:?}", cpu.get_buffer());
+    /// ```
     fn load_rom(&mut self, file_path: &str) -> io::Result<()> {
         let mut file = File::open(file_path)?;
         file.read(&mut self.memory[PROGRAM_START_ADDRESS as usize..])?;
         Ok(())
     }
 
+    /// Parses the opcode and executes the instruction.
+    /// 
+    /// Uses the CHIP-8 instruction set. A
+    /// 
+    /// # Panics
+    /// If the input instruction is not a valid CHIP-8 instruction, unimplemented!() is called.
     fn parse_opcode(&mut self, opcode: u16) {
         let x = ((opcode & 0x0F00) >> 8) as usize;
         let y = ((opcode & 0x00F0) >> 4) as usize;
@@ -235,13 +257,13 @@ impl Cpu {
                         let screen_pixel = &mut self.monochrome_display
                             [(y_pos as usize + row) * WIDTH + (x_pos as usize + col)];
 
-                            if sprite_pixel != 0 {
-                                if *screen_pixel {
-                                    self.registers[0xF] = 1;
-                                }
-
-                                *screen_pixel = !*screen_pixel;
+                        if sprite_pixel != 0 {
+                            if *screen_pixel {
+                                self.registers[0xF] = 1;
                             }
+
+                            *screen_pixel = !*screen_pixel;
+                        }
                     }
                 }
             }
@@ -331,6 +353,9 @@ impl Cpu {
         }
     }
 
+    /// Simulates one execution cycle of the cpu.
+    /// 
+    /// If delay_timer or sound_timer are greater than 0, they are decremented by 1.
     fn cycle(&mut self) {
         self.current_opcode = (self.memory[self.program_counter as usize] as u16) << 8
             | self.memory[self.program_counter as usize + 1] as u16;
@@ -346,6 +371,7 @@ impl Cpu {
         }
     }
 
+    /// Returns a mutable reference to the monochrome display buffer.
     fn get_buffer(&mut self) -> &mut Vec<bool> {
         &mut self.monochrome_display
     }
