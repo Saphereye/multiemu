@@ -353,7 +353,7 @@ impl Cpu {
 
 fn main() {
     let mut cpu = Cpu::default();
-    cpu.load_rom("roms/test_opcode.ch8").unwrap();
+    cpu.load_rom("roms/tetris.ch8").unwrap();
 
     let mut window = Window::new(
         "Test - ESC to exit",
