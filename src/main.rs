@@ -103,7 +103,7 @@ impl Cpu {
     /// ```
     fn load_rom(&mut self, file_path: &Path) -> io::Result<()> {
         let mut file = File::open(file_path)?;
-        file.read_exact(&mut self.memory[PROGRAM_START_ADDRESS as usize..])?;
+        file.read(&mut self.memory[PROGRAM_START_ADDRESS as usize..])?;
         Ok(())
     }
 
