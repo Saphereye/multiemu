@@ -1,16 +1,21 @@
-use lazy_static::lazy_static;
+use clap::Parser;
+use minifb::{Key, Scale, Window, WindowOptions};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read};
-
-use minifb::{Key, Scale, Window, WindowOptions};
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::LazyLock;
+use std::time::Duration;
 
 const WIDTH: usize = 64;
 const HEIGHT: usize = 32;
+const PROGRAM_START_ADDRESS: u16 = 0x200;
+const FONTSET_START_ADDRESS: u16 = 0x50;
 
-lazy_static! {
-    /// The CHIP-8 font set.
-    static ref FONT_SET: Vec<u8> = vec![
+/// The CHIP-8 font set.
+static FONT_SET: LazyLock<[u8; 80]> = LazyLock::new(|| {
+    [
         0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
         0x20, 0x60, 0x20, 0x20, 0x70, // 1
         0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
@@ -26,11 +31,13 @@ lazy_static! {
         0xF0, 0x80, 0x80, 0x80, 0xF0, // C
         0xE0, 0x90, 0x90, 0x90, 0xE0, // D
         0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
-        0xF0, 0x80, 0xF0, 0x80, 0x80  // F
-    ];
+        0xF0, 0x80, 0xF0, 0x80, 0x80, // F
+    ]
+});
 
-    /// Maps the CHIP-8 keypad to the keyboard.
-    static ref KEY_MAP: HashMap<u8, Key> = HashMap::from([
+/// Maps the CHIP-8 keypad to the keyboard.
+static KEY_MAP: LazyLock<HashMap<u8, Key>> = LazyLock::new(|| {
+    HashMap::from([
         (0x0, Key::X),
         (0x1, Key::Key1),
         (0x2, Key::Key2),
@@ -46,84 +53,80 @@ lazy_static! {
         (0xC, Key::Key4),
         (0xD, Key::R),
         (0xE, Key::F),
-        (0xF, Key::V)
-    ]);
-
-}
-
-const PROGRAM_START_ADDRESS: u16 = 0x200;
-const FONTSET_START_ADDRESS: u16 = 0x50;
+        (0xF, Key::V),
+    ])
+});
 
 /// Implementation of the Chip-8 CPU
 struct Cpu {
-    registers: Vec<u8>,
-    memory: Vec<u8>,
+    registers: [u8; 16],
+    memory: [u8; 4096],
     index_register: u16,
     program_counter: u16,
-    stack: Vec<u16>, // 16 levels
+    stack: [u16; 16], // 16 levels
     stack_pointer: u8,
     delay_timer: u8,
     sound_timer: u8,
-    input_keys: Vec<bool>,         // true of nth key is pressed
-    monochrome_display: Vec<bool>, // true if pixel is on
+    input_keys: [bool; 16],                     // true if nth key is pressed
+    previous_input_keys: [bool; 16],
+    monochrome_display: [bool; WIDTH * HEIGHT], // true if pixel is on
     current_opcode: u16,
 }
 
-impl Default for Cpu {
+impl Cpu {
     /// Initialize the CPU with default values.
     ///
-    /// The program counter is set to 0x200, the start address of the program. 
+    /// The program counter is set to 0x200, the start address of the program.
     /// All registers are set to 0 and the monochrome display is cleared.
-    fn default() -> Self {
+    fn new() -> Self {
         let mut memory = vec![0; 4096];
         memory[FONTSET_START_ADDRESS as usize
             ..(FONTSET_START_ADDRESS + FONT_SET.len() as u16) as usize]
-            .copy_from_slice(&FONT_SET);
+            .copy_from_slice(&*FONT_SET);
         Self {
-            registers: vec![0; 16],
-            memory,
+            registers: [0; 16],
+            memory: [0; 4096],
             index_register: 0,
             program_counter: PROGRAM_START_ADDRESS,
-            stack: vec![0; 16],
+            stack: [0; 16],
             stack_pointer: 0,
             delay_timer: 0,
             sound_timer: 0,
-            input_keys: vec![false; 16],
-            monochrome_display: vec![false; 64 * 32],
+            input_keys: [false; 16],
+            previous_input_keys: [false; 16],
             current_opcode: 0,
+            monochrome_display: [false; 64 * 32],
         }
     }
-}
 
-impl Cpu {
     /// Loads the ROM into memory starting at 0x200 given file name.
-    /// 
+    ///
     /// # Examples
     /// ```
     /// let mut cpu = Cpu::default();
-    /// cpu.load_rom("roms/tetris.ch8").unwrap();
-    /// 
+    /// cpu.load_rom("roms/tetris.ch8")?;
+    ///
     /// println!("{:?}", cpu.get_buffer());
     /// ```
-    fn load_rom(&mut self, file_path: &str) -> io::Result<()> {
+    fn load_rom(&mut self, file_path: &Path) -> io::Result<()> {
         let mut file = File::open(file_path)?;
-        file.read(&mut self.memory[PROGRAM_START_ADDRESS as usize..])?;
+        file.read_exact(&mut self.memory[PROGRAM_START_ADDRESS as usize..])?;
         Ok(())
     }
 
     /// Parses the opcode and executes the instruction.
-    /// 
+    ///
     /// Uses the CHIP-8 instruction set. A
-    /// 
+    ///
     /// # Panics
-    /// If the input instruction is not a valid CHIP-8 instruction, unimplemented!() is called.
+    /// If the input instruction is not a valid CHIP-8 instruction, unreachable!() is called.
     fn parse_opcode(&mut self, opcode: u16) {
         let x = ((opcode & 0x0F00) >> 8) as usize;
         let y = ((opcode & 0x00F0) >> 4) as usize;
         match opcode {
             0x00E0 => {
                 // CLS, clear display
-                self.monochrome_display = vec![false; 64 * 32];
+                self.monochrome_display = [false; 64 * 32];
             }
             0x00EE => {
                 // RET, return from subroutine
@@ -219,7 +222,7 @@ impl Cpu {
                         self.registers[0xF] = (self.registers[x] & 0x80) >> 7;
                         self.registers[x] <<= 1;
                     }
-                    _ => unimplemented!("opcode {:X}", opcode),
+                    _ => unreachable!("opcode {:X}", opcode),
                 }
             }
             0x9000..=0x9FFF => {
@@ -247,21 +250,24 @@ impl Cpu {
                 let height = (opcode & 0x000F) as usize;
                 let x_pos = self.registers[x] % WIDTH as u8;
                 let y_pos = self.registers[y] % HEIGHT as u8;
-
                 self.registers[0xF] = 0;
 
                 for row in 0..height {
+                    if y_pos as usize + row >= HEIGHT {
+                        break;
+                    }
                     let sprite_byte = self.memory[self.index_register as usize + row];
                     for col in 0..8 {
+                        if x_pos as usize + col >= WIDTH {
+                            break;
+                        }
                         let sprite_pixel = sprite_byte & (0x80 >> col);
-                        let screen_pixel = &mut self.monochrome_display
-                            [(y_pos as usize + row) * WIDTH + (x_pos as usize + col)];
-
+                        let screen_index = (y_pos as usize + row) * WIDTH + (x_pos as usize + col);
+                        let screen_pixel = &mut self.monochrome_display[screen_index];
                         if sprite_pixel != 0 {
                             if *screen_pixel {
                                 self.registers[0xF] = 1;
                             }
-
                             *screen_pixel = !*screen_pixel;
                         }
                     }
@@ -281,7 +287,7 @@ impl Cpu {
                             self.program_counter += 2;
                         }
                     }
-                    _ => unimplemented!("opcode {:X}", opcode),
+                    _ => unreachable!("opcode {:X}", opcode),
                 }
             }
             0xF000..=0xFFFF => {
@@ -292,14 +298,16 @@ impl Cpu {
                     }
                     0x0A => {
                         // Fx0A - LD Vx, K, Wait for a key press, store the value of the key in Vx.
-                        'input_checker: loop {
-                            for index in 0..16 {
-                                if self.input_keys[index] {
-                                    self.registers[x] = index as u8;
-                                    break 'input_checker;
-                                }
+                        let mut key_pressed = false;
+                        for index in 0..16 {
+                            if self.input_keys[index] && !self.previous_input_keys[index] {
+                                self.registers[x] = index as u8;
+                                key_pressed = true;
+                                break;
                             }
-                            self.program_counter -= 2;
+                        }
+                        if !key_pressed {
+                            self.program_counter -= 2; // Stay on this instruction
                         }
                     }
                     0x15 => {
@@ -346,15 +354,15 @@ impl Cpu {
                                 self.memory[self.index_register as usize + index];
                         }
                     }
-                    _ => unimplemented!("opcode {:X}", opcode),
+                    _ => unreachable!("opcode {:X}", opcode),
                 }
             }
-            _ => unimplemented!("opcode {:X}", opcode),
+            _ => unreachable!("opcode {:X}", opcode),
         }
     }
 
     /// Simulates one execution cycle of the cpu.
-    /// 
+    ///
     /// If delay_timer or sound_timer are greater than 0, they are decremented by 1.
     fn cycle(&mut self) {
         self.current_opcode = (self.memory[self.program_counter as usize] as u16) << 8
@@ -372,43 +380,56 @@ impl Cpu {
     }
 
     /// Returns a mutable reference to the monochrome display buffer.
-    fn get_buffer(&mut self) -> &mut Vec<bool> {
+    fn get_buffer(&mut self) -> &mut [bool; 2048] {
         &mut self.monochrome_display
     }
 }
 
-fn main() {
-    let mut cpu = Cpu::default();
-    cpu.load_rom("roms/tetris.ch8").unwrap();
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    /// Input file name
+    file: PathBuf,
+
+    /// Clock delta time (usec)
+    #[arg(short, long, default_value = "200")]
+    delta: u64,
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cli = Cli::parse();
+
+    let mut cpu = Cpu::new();
+    cpu.load_rom(&cli.file)?;
 
     let mut window = Window::new(
         "Test - ESC to exit",
         WIDTH,
         HEIGHT,
         WindowOptions {
-            scale: Scale::X16,
+            scale: Scale::X8,
             ..WindowOptions::default()
         },
-    )
-    .unwrap_or_else(|e| {
-        panic!("{}", e);
-    });
-
-    window.limit_update_rate(Some(std::time::Duration::from_micros(16600)));
+    )?;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         for (key, value) in KEY_MAP.iter() {
             cpu.input_keys[*key as usize] = window.is_key_down(*value);
         }
 
+        std::thread::sleep(Duration::from_micros(cli.delta));
         cpu.cycle();
+
+        cpu.previous_input_keys = cpu.input_keys;
 
         // We unwrap here as we want this code to exit if it fails. Real applications may want to handle this in a different way
         let buffer: Vec<u32> = cpu
             .get_buffer()
-            .iter_mut()
-            .map(|&mut b| if b { 0xFFFFFF } else { 0 })
+            .iter()
+            .map(|b| if *b { 0xFFFFFF } else { 0 })
             .collect();
-        window.update_with_buffer(&buffer, WIDTH, HEIGHT).unwrap();
+        window.update_with_buffer(&buffer, WIDTH, HEIGHT)?;
     }
+
+    Ok(())
 }
