@@ -1,6 +1,6 @@
 use crate::configs::{FONTSET_START_ADDRESS, HEIGHT, PROGRAM_START_ADDRESS, WIDTH};
 use crate::rand::Lcg;
-use raplay::{Sink, source::Sine};
+use raplay::{source::Sine, Sink};
 
 /// The CHIP-8 font set.
 const FONT_SET: [u8; 80] = [
@@ -36,8 +36,13 @@ pub struct Cpu {
     pub previous_input_keys: [bool; 16],
     pub buffer: [bool; WIDTH * HEIGHT], // true if pixel is on
     current_opcode: u16,
+
+    // These fields aren't cpu specific,
+    // They are instead helper fields.
     lcg: Lcg,
     audio: Sink,
+    pub to_draw: bool,
+    pub is_mute: bool,
 }
 
 impl Cpu {
@@ -74,6 +79,8 @@ impl Cpu {
             // Entropy: 7.366bits, where 8 bits is optimal
             lcg: Lcg::new(75, 1, 31),
             audio: sink,
+            to_draw: false,
+            is_mute: false,
         }
     }
 
@@ -238,6 +245,8 @@ impl Cpu {
                         }
                     }
                 }
+
+                self.to_draw = true;
             }
             0xE000..=0xEFFF => {
                 match opcode & 0x00FF {
@@ -272,6 +281,7 @@ impl Cpu {
                                 break;
                             }
                         }
+
                         if !key_pressed {
                             self.program_counter -= 2; // Stay on this instruction
                         }
@@ -344,9 +354,11 @@ impl Cpu {
         }
 
         if self.sound_timer > 0 {
-            self.audio.play(true).unwrap();
+            if !self.is_mute {
+                self.audio.play(true).unwrap();
+            }
             self.sound_timer -= 1;
-        } else {
+        } else if !self.is_mute {
             self.audio.pause().unwrap();
         }
     }

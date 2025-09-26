@@ -43,8 +43,16 @@ fn load_rom(file_path: &Path) -> std::io::Result<Cpu> {
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    /// Input file name
+    /// ROM file path
     file: PathBuf,
+
+    /// Number of CPU instructions per timer update (timer is at 60Hz)
+    #[arg(short, long, default_value_t = 1)]
+    cycles: u64,
+
+    /// Enable to mute the beep sound
+    #[arg(short, long, default_value_t = false)]
+    mute: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -59,37 +67,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..WindowOptions::default()
         },
     )?;
+    cpu.is_mute = cli.mute;
 
-    let instructions_per_frame = 15; // ~900 instr/sec at 60Hz
     let timer_period = Duration::from_nanos(16_666_667); // 60Hz
     let mut last_timer_update = Instant::now();
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         window.update(); // pump input faster than render
 
-        // Poll keys
         for (key, value) in KEY_MAP.iter() {
             cpu.input_keys[*key as usize] = window.is_key_down(*value);
         }
 
-        // Run multiple instructions each loop
-        for _ in 0..instructions_per_frame {
+        for _ in 0..cli.cycles {
             cpu.execute_instruction();
         }
 
-        // Timers (60Hz)
         let now = Instant::now();
         if now.duration_since(last_timer_update) >= timer_period {
             cpu.update_timers();
             last_timer_update = now;
 
-            // Render at 60Hz
-            let buffer: Vec<u32> = cpu
-                .buffer
-                .iter()
-                .map(|b| if *b { 0xFFFFFF } else { 0 })
-                .collect();
-            window.update_with_buffer(&buffer, WIDTH, HEIGHT)?;
+            if cpu.to_draw {
+                let buffer: Vec<u32> = cpu
+                    .buffer
+                    .iter()
+                    .map(|b| if *b { 0xFFFFFF } else { 0 })
+                    .collect();
+                window.update_with_buffer(&buffer, WIDTH, HEIGHT)?;
+                cpu.to_draw = false;
+            }
         }
     }
     Ok(())
