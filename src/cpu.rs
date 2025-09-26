@@ -1,5 +1,6 @@
 use crate::configs::{FONTSET_START_ADDRESS, HEIGHT, PROGRAM_START_ADDRESS, WIDTH};
-use crate::rand::LCG;
+use crate::rand::Lcg;
+use raplay::{Sink, source::Sine};
 
 /// The CHIP-8 font set.
 const FONT_SET: [u8; 80] = [
@@ -35,7 +36,8 @@ pub struct Cpu {
     pub previous_input_keys: [bool; 16],
     pub buffer: [bool; WIDTH * HEIGHT], // true if pixel is on
     current_opcode: u16,
-    lcg: LCG,
+    lcg: Lcg,
+    audio: Sink,
 }
 
 impl Cpu {
@@ -48,6 +50,10 @@ impl Cpu {
         memory[FONTSET_START_ADDRESS as usize
             ..(FONTSET_START_ADDRESS + FONT_SET.len() as u16) as usize]
             .copy_from_slice(&FONT_SET);
+
+        let mut sink = Sink::default();
+        let src = Sine::new(440.0);
+        sink.load(Box::new(src), false).unwrap();
         Self {
             registers: [0; 16],
             memory: [0; 4096],
@@ -66,7 +72,8 @@ impl Cpu {
             // Monte Carlo PI Test: 3.120, where PI should be 3.142
             // Serial Coefficient: 0.090
             // Entropy: 7.366bits, where 8 bits is optimal
-            lcg: LCG::new(75, 1, 31),
+            lcg: Lcg::new(75, 1, 31),
+            audio: sink,
         }
     }
 
@@ -138,14 +145,17 @@ impl Cpu {
                     0x1 => {
                         // OR Vx, Vy, Vx |= Vy
                         self.registers[x] |= self.registers[y];
+                        self.registers[0xF] = 0;
                     }
                     0x2 => {
                         // AND Vx, Vy, Vx &= Vy
                         self.registers[x] &= self.registers[y];
+                        self.registers[0xF] = 0;
                     }
                     0x3 => {
                         // XOR Vx, Vy, Vx ^= Vy
                         self.registers[x] ^= self.registers[y];
+                        self.registers[0xF] = 0;
                     }
                     0x4 => {
                         // ADD Vx, Vy, Vx += Vy, VF = carry
@@ -163,8 +173,8 @@ impl Cpu {
                     }
                     0x6 => {
                         // SHR Vx {, Vy}, Vx >>= 1, VF = carry
-                        self.registers[0xF] = self.registers[x] & 0x1;
-                        self.registers[x] >>= 1;
+                        self.registers[0xF] = self.registers[y] & 0x1;
+                        self.registers[x] = self.registers[y] >> 1;
                     }
                     0x7 => {
                         // SUBN Vx, Vy, Vx = Vy - Vx, VF = !borrow
@@ -175,8 +185,8 @@ impl Cpu {
                     }
                     0xE => {
                         // SHL Vx {, Vy}, Vx <<= 1, VF = carry
-                        self.registers[0xF] = (self.registers[x] & 0x80) >> 7;
-                        self.registers[x] <<= 1;
+                        self.registers[0xF] = (self.registers[y] & 0x80) >> 7;
+                        self.registers[x] = self.registers[y] << 1;
                     }
                     _ => unreachable!("opcode {:X}", opcode),
                 }
@@ -302,6 +312,7 @@ impl Cpu {
                             self.memory[self.index_register as usize + index] =
                                 self.registers[index];
                         }
+                        self.index_register += 1 + x as u16;
                     }
                     0x65 => {
                         // LD Vx, [I], Read registers V0 through Vx from memory starting at location I.
@@ -309,6 +320,7 @@ impl Cpu {
                             self.registers[index] =
                                 self.memory[self.index_register as usize + index];
                         }
+                        self.index_register += 1 + x as u16;
                     }
                     _ => unreachable!("opcode {:X}", opcode),
                 }
@@ -330,8 +342,12 @@ impl Cpu {
         if self.delay_timer > 0 {
             self.delay_timer -= 1;
         }
+
         if self.sound_timer > 0 {
+            self.audio.play(true).unwrap();
             self.sound_timer -= 1;
+        } else {
+            self.audio.pause().unwrap();
         }
     }
 }

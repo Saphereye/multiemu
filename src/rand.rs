@@ -3,15 +3,15 @@
 /// Xi+1 = (a x Xi + c) mod m
 ///
 /// here state is Xi, and m is max value of the data type
-pub struct LCG {
+pub struct Lcg {
     state: u8,
     a: u8,
     c: u8,
 }
 
-impl LCG {
-    pub fn new(a: u8, c: u8, state: u8) -> LCG {
-        LCG { state: state, a: a, c: c }
+impl Lcg {
+    pub fn new(a: u8, c: u8, state: u8) -> Lcg {
+        Lcg { state, a, c}
     }
 
     pub fn next(&mut self) -> u8 {

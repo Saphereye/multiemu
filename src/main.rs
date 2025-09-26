@@ -60,33 +60,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     )?;
 
-    let timer_period = Duration::from_nanos(16_666_667); // Exactly 60Hz
+    let instructions_per_frame = 15; // ~900 instr/sec at 60Hz
+    let timer_period = Duration::from_nanos(16_666_667); // 60Hz
     let mut last_timer_update = Instant::now();
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        let now = Instant::now();
+        window.update(); // pump input faster than render
 
+        // Poll keys
         for (key, value) in KEY_MAP.iter() {
             cpu.input_keys[*key as usize] = window.is_key_down(*value);
         }
 
-        cpu.execute_instruction(); // Execute one instruction
+        // Run multiple instructions each loop
+        for _ in 0..instructions_per_frame {
+            cpu.execute_instruction();
+        }
 
+        // Timers (60Hz)
+        let now = Instant::now();
         if now.duration_since(last_timer_update) >= timer_period {
             cpu.update_timers();
             last_timer_update = now;
+
+            // Render at 60Hz
+            let buffer: Vec<u32> = cpu
+                .buffer
+                .iter()
+                .map(|b| if *b { 0xFFFFFF } else { 0 })
+                .collect();
+            window.update_with_buffer(&buffer, WIDTH, HEIGHT)?;
         }
-
-        cpu.previous_input_keys = cpu.input_keys;
-
-        let buffer: Vec<u32> = cpu
-            .buffer
-            .iter()
-            .map(|b| if *b { 0xFFFFFF } else { 0 })
-            .collect();
-        window.update_with_buffer(&buffer, WIDTH, HEIGHT)?;
-
-        std::thread::sleep(Duration::from_micros(50));
     }
     Ok(())
 }

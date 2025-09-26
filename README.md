@@ -21,10 +21,4 @@ More roms can be found [here](https://github.com/dmatlack/chip8/tree/master/roms
 
 ## Resources
 - [CHIP 8 Specification](https://www.cs.columbia.edu/~sedwards/classes/2016/4840-spring/designs/Chip8.pdf)
-
-
-
-
-
-
-
+- [Chip 8 test suite](https://github.com/Timendus/chip8-test-suite)
