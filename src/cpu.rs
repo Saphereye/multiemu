@@ -24,23 +24,23 @@ const FONT_SET: [u8; 80] = [
 
 /// Implementation of the Chip-8 CPU
 pub struct Cpu {
-    registers: [u8; 16],
+    pub registers: [u8; 16],
     pub memory: [u8; 4096],
-    index_register: u16,
-    program_counter: u16,
-    stack: [u16; 16], // 16 levels
-    stack_pointer: u8,
-    delay_timer: u8,
-    sound_timer: u8,
+    pub index_register: u16,
+    pub program_counter: u16,
+    pub stack: [u16; 16], // 16 levels
+    pub stack_pointer: u8,
+    pub delay_timer: u8,
+    pub sound_timer: u8,
     pub input_keys: [bool; 16], // true if nth key is pressed
     pub previous_input_keys: [bool; 16],
     pub buffer: [bool; WIDTH * HEIGHT], // true if pixel is on
-    current_opcode: u16,
+    pub current_opcode: u16,
 
     // These fields aren't cpu specific,
     // They are instead helper fields.
-    lcg: Lcg,
-    audio: Sink,
+    pub lcg: Lcg,
+    pub audio: Sink,
     pub to_draw: bool,
     pub is_mute: bool,
 }
@@ -51,7 +51,7 @@ impl Cpu {
     /// The program counter is set to 0x200, the start address of the program.
     /// All registers are set to 0 and the monochrome display is cleared.
     pub fn new() -> Self {
-        let mut memory = vec![0; 4096];
+        let mut memory = [0; 4096];
         memory[FONTSET_START_ADDRESS as usize
             ..(FONTSET_START_ADDRESS + FONT_SET.len() as u16) as usize]
             .copy_from_slice(&FONT_SET);
@@ -61,7 +61,7 @@ impl Cpu {
         sink.load(Box::new(src), false).unwrap();
         Self {
             registers: [0; 16],
-            memory: [0; 4096],
+            memory,
             index_register: 0,
             program_counter: PROGRAM_START_ADDRESS,
             stack: [0; 16],
