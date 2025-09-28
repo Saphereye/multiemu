@@ -10,7 +10,7 @@ mod configs;
 mod cpu;
 mod rand;
 
-use configs::{HEIGHT, PROGRAM_START_ADDRESS, WIDTH, FONTSET_START_ADDRESS};
+use configs::{FONTSET_START_ADDRESS, HEIGHT, PROGRAM_START_ADDRESS, WIDTH};
 use cpu::Cpu;
 
 const KEY_MAP: [(usize, Key); 16] = [
@@ -418,7 +418,8 @@ impl eframe::App for App {
 
                         for addr in (start..end).step_by(2) {
                             if addr + 1 < self.cpu.memory.len() {
-                                let opcode = ((self.cpu.memory[addr] as u16) << 8) | (self.cpu.memory[addr + 1] as u16);
+                                let opcode = ((self.cpu.memory[addr] as u16) << 8)
+                                    | (self.cpu.memory[addr + 1] as u16);
 
                                 ui.horizontal(|ui| {
                                     let is_current = addr == pc;
@@ -437,68 +438,267 @@ impl eframe::App for App {
                                         );
                                     }
 
-                                    ui.colored_label(color, format!("{:04X}: {:04X}", addr, opcode));
+                                    ui.colored_label(
+                                        color,
+                                        format!("{:04X}: {:04X}", addr, opcode),
+                                    );
 
                                     ui.separator();
 
                                     let instruction = match opcode & 0xF000 {
                                         0x0000 => match opcode {
-                                            0x00E0 => "CLS              ; Clear display".to_string(),
-                                            0x00EE => "RET              ; Return from subroutine".to_string(),
-                                            _ => format!("SYS {:03X}         ; Call system routine", opcode & 0x0FFF),
+                                            0x00E0 => format!("{:<20}; Clear display", "CLS"),
+                                            0x00EE => {
+                                                format!("{:<20}; Return from subroutine", "RET")
+                                            }
+                                            _ => format!(
+                                                "{:<20}; Call system routine SYS {:03X}",
+                                                format!("SYS {:03X}", opcode & 0x0FFF),
+                                                opcode & 0x0FFF
+                                            ),
                                         },
-                                        0x1000 => format!("JP {:03X}          ; Jump to address {:03X}", opcode & 0x0FFF, opcode & 0x0FFF),
-                                        0x2000 => format!("CALL {:03X}        ; Call subroutine at {:03X}", opcode & 0x0FFF, opcode & 0x0FFF),
-                                        0x3000 => format!("SE V{:X}, {:02X}       ; Skip if V{:X} == {:02X}", (opcode & 0x0F00) >> 8, opcode & 0x00FF, (opcode & 0x0F00) >> 8, opcode & 0x00FF),
-                                        0x4000 => format!("SNE V{:X}, {:02X}      ; Skip if V{:X} != {:02X}", (opcode & 0x0F00) >> 8, opcode & 0x00FF, (opcode & 0x0F00) >> 8, opcode & 0x00FF),
-                                        0x5000 => format!("SE V{:X}, V{:X}       ; Skip if V{:X} == V{:X}", (opcode & 0x0F00) >> 8, (opcode & 0x00F0) >> 4, (opcode & 0x0F00) >> 8, (opcode & 0x00F0) >> 4),
-                                        0x6000 => format!("LD V{:X}, {:02X}       ; Load {:02X} into V{:X}", (opcode & 0x0F00) >> 8, opcode & 0x00FF, opcode & 0x00FF, (opcode & 0x0F00) >> 8),
-                                        0x7000 => format!("ADD V{:X}, {:02X}      ; Add {:02X} to V{:X}", (opcode & 0x0F00) >> 8, opcode & 0x00FF, opcode & 0x00FF, (opcode & 0x0F00) >> 8),
+                                        0x1000 => format!(
+                                            "{:<20}; Jump to address {:03X}",
+                                            format!("JP {:03X}", opcode & 0x0FFF),
+                                            opcode & 0x0FFF
+                                        ),
+                                        0x2000 => format!(
+                                            "{:<20}; Call subroutine at {:03X}",
+                                            format!("CALL {:03X}", opcode & 0x0FFF),
+                                            opcode & 0x0FFF
+                                        ),
+                                        0x3000 => {
+                                            let x = (opcode & 0x0F00) >> 8;
+                                            let kk = opcode & 0x00FF;
+                                            format!(
+                                                "{:<20}; Skip if V{:X} == {:02X}",
+                                                format!("SE V{:X}, {:02X}", x, kk),
+                                                x,
+                                                kk
+                                            )
+                                        }
+                                        0x4000 => {
+                                            let x = (opcode & 0x0F00) >> 8;
+                                            let kk = opcode & 0x00FF;
+                                            format!(
+                                                "{:<20}; Skip if V{:X} != {:02X}",
+                                                format!("SNE V{:X}, {:02X}", x, kk),
+                                                x,
+                                                kk
+                                            )
+                                        }
+                                        0x5000 => {
+                                            let x = (opcode & 0x0F00) >> 8;
+                                            let y = (opcode & 0x00F0) >> 4;
+                                            format!(
+                                                "{:<20}; Skip if V{:X} == V{:X}",
+                                                format!("SE V{:X}, V{:X}", x, y),
+                                                x,
+                                                y
+                                            )
+                                        }
+                                        0x6000 => {
+                                            let x = (opcode & 0x0F00) >> 8;
+                                            let kk = opcode & 0x00FF;
+                                            format!(
+                                                "{:<20}; Load {:02X} into V{:X}",
+                                                format!("LD V{:X}, {:02X}", x, kk),
+                                                kk,
+                                                x
+                                            )
+                                        }
+                                        0x7000 => {
+                                            let x = (opcode & 0x0F00) >> 8;
+                                            let kk = opcode & 0x00FF;
+                                            format!(
+                                                "{:<20}; Add {:02X} to V{:X}",
+                                                format!("ADD V{:X}, {:02X}", x, kk),
+                                                kk,
+                                                x
+                                            )
+                                        }
                                         0x8000 => {
                                             let x = (opcode & 0x0F00) >> 8;
                                             let y = (opcode & 0x00F0) >> 4;
                                             match opcode & 0x000F {
-                                                0x0 => format!("LD V{:X}, V{:X}       ; V{:X} = V{:X}", x, y, x, y),
-                                                0x1 => format!("OR V{:X}, V{:X}       ; V{:X} |= V{:X}", x, y, x, y),
-                                                0x2 => format!("AND V{:X}, V{:X}      ; V{:X} &= V{:X}", x, y, x, y),
-                                                0x3 => format!("XOR V{:X}, V{:X}      ; V{:X} ^= V{:X}", x, y, x, y),
-                                                0x4 => format!("ADD V{:X}, V{:X}      ; V{:X} += V{:X}, VF = carry", x, y, x, y),
-                                                0x5 => format!("SUB V{:X}, V{:X}      ; V{:X} -= V{:X}, VF = borrow", x, y, x, y),
-                                                0x6 => format!("SHR V{:X}           ; V{:X} >>= 1, VF = LSB", x, x),
-                                                0x7 => format!("SUBN V{:X}, V{:X}     ; V{:X} = V{:X} - V{:X}, VF = borrow", x, y, x, y, x),
-                                                0xE => format!("SHL V{:X}           ; V{:X} <<= 1, VF = MSB", x, x),
-                                                _ => format!("8{:X}{:X}{:X}          ; Unknown 8xxx instruction", x, y, opcode & 0x000F),
+                                                0x0 => format!(
+                                                    "{:<20}; V{:X} = V{:X}",
+                                                    format!("LD V{:X}, V{:X}", x, y),
+                                                    x,
+                                                    y
+                                                ),
+                                                0x1 => format!(
+                                                    "{:<20}; V{:X} |= V{:X}",
+                                                    format!("OR V{:X}, V{:X}", x, y),
+                                                    x,
+                                                    y
+                                                ),
+                                                0x2 => format!(
+                                                    "{:<20}; V{:X} &= V{:X}",
+                                                    format!("AND V{:X}, V{:X}", x, y),
+                                                    x,
+                                                    y
+                                                ),
+                                                0x3 => format!(
+                                                    "{:<20}; V{:X} ^= V{:X}",
+                                                    format!("XOR V{:X}, V{:X}", x, y),
+                                                    x,
+                                                    y
+                                                ),
+                                                0x4 => format!(
+                                                    "{:<20}; V{:X} += V{:X}, VF = carry",
+                                                    format!("ADD V{:X}, V{:X}", x, y),
+                                                    x,
+                                                    y
+                                                ),
+                                                0x5 => format!(
+                                                    "{:<20}; V{:X} -= V{:X}, VF = borrow",
+                                                    format!("SUB V{:X}, V{:X}", x, y),
+                                                    x,
+                                                    y
+                                                ),
+                                                0x6 => format!(
+                                                    "{:<20}; V{:X} >>= 1, VF = carry",
+                                                    format!("SHR V{:X}", x),
+                                                    x
+                                                ),
+                                                0x7 => format!(
+                                                    "{:<20}; V{:X} = V{:X} - V{:X}, VF = borrow",
+                                                    format!("SUBN V{:X}, V{:X}", x, y),
+                                                    x,
+                                                    y,
+                                                    x
+                                                ),
+                                                0xE => format!(
+                                                    "{:<20}; V{:X} <<= 1, VF = carry",
+                                                    format!("SHL V{:X}", x),
+                                                    x
+                                                ),
+                                                _ => format!(
+                                                    "{:<20}; Unknown 8xxx instruction",
+                                                    format!("8{:X}{:X}{:X}", x, y, opcode & 0x000F)
+                                                ),
                                             }
-                                        },
-                                        0x9000 => format!("SNE V{:X}, V{:X}      ; Skip if V{:X} != V{:X}", (opcode & 0x0F00) >> 8, (opcode & 0x00F0) >> 4, (opcode & 0x0F00) >> 8, (opcode & 0x00F0) >> 4),
-                                        0xA000 => format!("LD I, {:03X}        ; I = {:03X}", opcode & 0x0FFF, opcode & 0x0FFF),
-                                        0xB000 => format!("JP V0, {:03X}       ; Jump to V0 + {:03X}", opcode & 0x0FFF, opcode & 0x0FFF),
-                                        0xC000 => format!("RND V{:X}, {:02X}      ; V{:X} = random() & {:02X}", (opcode & 0x0F00) >> 8, opcode & 0x00FF, (opcode & 0x0F00) >> 8, opcode & 0x00FF),
-                                        0xD000 => format!("DRW V{:X}, V{:X}, {:X}    ; Draw sprite at (V{:X}, V{:X}) height {:X}", (opcode & 0x0F00) >> 8, (opcode & 0x00F0) >> 4, opcode & 0x000F, (opcode & 0x0F00) >> 8, (opcode & 0x00F0) >> 4, opcode & 0x000F),
+                                        }
+                                        0x9000 => {
+                                            let x = (opcode & 0x0F00) >> 8;
+                                            let y = (opcode & 0x00F0) >> 4;
+                                            format!(
+                                                "{:<20}; Skip if V{:X} != V{:X}",
+                                                format!("SNE V{:X}, V{:X}", x, y),
+                                                x,
+                                                y
+                                            )
+                                        }
+                                        0xA000 => format!(
+                                            "{:<20}; I = {:03X}",
+                                            format!("LD I, {:03X}", opcode & 0x0FFF),
+                                            opcode & 0x0FFF
+                                        ),
+                                        0xB000 => format!(
+                                            "{:<20}; Jump to V0 + {:03X}",
+                                            format!("JP V0, {:03X}", opcode & 0x0FFF),
+                                            opcode & 0x0FFF
+                                        ),
+                                        0xC000 => {
+                                            let x = (opcode & 0x0F00) >> 8;
+                                            let kk = opcode & 0x00FF;
+                                            format!(
+                                                "{:<20}; V{:X} = random() & {:02X}",
+                                                format!("RND V{:X}, {:02X}", x, kk),
+                                                x,
+                                                kk
+                                            )
+                                        }
+                                        0xD000 => {
+                                            let x = (opcode & 0x0F00) >> 8;
+                                            let y = (opcode & 0x00F0) >> 4;
+                                            let n = opcode & 0x000F;
+                                            format!(
+                                                "{:<20}; Draw sprite at (V{:X}, V{:X}) height {:X}",
+                                                format!("DRW V{:X}, V{:X}, {:X}", x, y, n),
+                                                x,
+                                                y,
+                                                n
+                                            )
+                                        }
                                         0xE000 => {
                                             let x = (opcode & 0x0F00) >> 8;
                                             match opcode & 0x00FF {
-                                                0x9E => format!("SKP V{:X}          ; Skip if key V{:X} pressed", x, x),
-                                                0xA1 => format!("SKNP V{:X}         ; Skip if key V{:X} not pressed", x, x),
-                                                _ => format!("E{:X}{:02X}           ; Unknown Exxx instruction", x, opcode & 0x00FF),
+                                                0x9E => format!(
+                                                    "{:<20}; Skip if key V{:X} pressed",
+                                                    format!("SKP V{:X}", x),
+                                                    x
+                                                ),
+                                                0xA1 => format!(
+                                                    "{:<20}; Skip if key V{:X} not pressed",
+                                                    format!("SKNP V{:X}", x),
+                                                    x
+                                                ),
+                                                _ => format!(
+                                                    "{:<20}; Unknown Exxx instruction",
+                                                    format!("E{:X}{:02X}", x, opcode & 0x00FF)
+                                                ),
                                             }
-                                        },
+                                        }
                                         0xF000 => {
                                             let x = (opcode & 0x0F00) >> 8;
                                             match opcode & 0x00FF {
-                                                0x07 => format!("LD V{:X}, DT       ; V{:X} = delay timer", x, x),
-                                                0x0A => format!("LD V{:X}, K        ; Wait for key, store in V{:X}", x, x),
-                                                0x15 => format!("LD DT, V{:X}       ; Delay timer = V{:X}", x, x),
-                                                0x18 => format!("LD ST, V{:X}       ; Sound timer = V{:X}", x, x),
-                                                0x1E => format!("ADD I, V{:X}       ; I += V{:X}", x, x),
-                                                0x29 => format!("LD F, V{:X}        ; I = sprite address for digit V{:X}", x, x),
-                                                0x33 => format!("LD B, V{:X}        ; Store BCD of V{:X} at [I]", x, x),
-                                                0x55 => format!("LD [I], V{:X}      ; Store V0-V{:X} at [I]", x, x),
-                                                0x65 => format!("LD V{:X}, [I]      ; Load V0-V{:X} from [I]", x, x),
-                                                _ => format!("F{:X}{:02X}           ; Unknown Fxxx instruction", x, opcode & 0x00FF),
+                                                0x07 => format!(
+                                                    "{:<20}; V{:X} = delay timer",
+                                                    format!("LD V{:X}, DT", x),
+                                                    x
+                                                ),
+                                                0x0A => format!(
+                                                    "{:<20}; Wait for key, store in V{:X}",
+                                                    format!("LD V{:X}, K", x),
+                                                    x
+                                                ),
+                                                0x15 => format!(
+                                                    "{:<20}; Delay timer = V{:X}",
+                                                    format!("LD DT, V{:X}", x),
+                                                    x
+                                                ),
+                                                0x18 => format!(
+                                                    "{:<20}; Sound timer = V{:X}",
+                                                    format!("LD ST, V{:X}", x),
+                                                    x
+                                                ),
+                                                0x1E => format!(
+                                                    "{:<20}; I += V{:X}",
+                                                    format!("ADD I, V{:X}", x),
+                                                    x
+                                                ),
+                                                0x29 => format!(
+                                                    "{:<20}; I = sprite address for digit V{:X}",
+                                                    format!("LD F, V{:X}", x),
+                                                    x
+                                                ),
+                                                0x33 => format!(
+                                                    "{:<20}; Store BCD of V{:X} at [I]",
+                                                    format!("LD B, V{:X}", x),
+                                                    x
+                                                ),
+                                                0x55 => format!(
+                                                    "{:<20}; Store V0-V{:X} at [I]",
+                                                    format!("LD [I], V{:X}", x),
+                                                    x
+                                                ),
+                                                0x65 => format!(
+                                                    "{:<20}; Load V0-V{:X} from [I]",
+                                                    format!("LD V{:X}, [I]", x),
+                                                    x
+                                                ),
+                                                _ => format!(
+                                                    "{:<20}; Unknown Fxxx instruction",
+                                                    format!("F{:X}{:02X}", x, opcode & 0x00FF)
+                                                ),
                                             }
-                                        },
-                                        _ => format!("UNKNOWN {:04X}    ; Unrecognized instruction", opcode),
+                                        }
+                                        _ => format!(
+                                            "{:<20}; Unrecognized instruction",
+                                            format!("UNKNOWN {:04X}", opcode)
+                                        ),
                                     };
 
                                     ui.colored_label(color, instruction);

@@ -33,7 +33,6 @@ pub struct Cpu {
     pub delay_timer: u8,
     pub sound_timer: u8,
     pub input_keys: [bool; 16], // true if nth key is pressed
-    pub previous_input_keys: [bool; 16],
     pub buffer: [bool; WIDTH * HEIGHT], // true if pixel is on
     pub current_opcode: u16,
 
@@ -70,7 +69,6 @@ impl Cpu {
             delay_timer: 0,
             sound_timer: 0,
             input_keys: [false; 16],
-            previous_input_keys: [false; 16],
             current_opcode: 0,
             buffer: [false; 64 * 32],
             // For the first 200 values of this LCG:
@@ -285,10 +283,10 @@ impl Cpu {
                             }
                         }
 
+                        // Stay on this instruction until a key is released
                         if self.is_key_pressed && self.input_keys.iter().all(|x| !x) {
                             self.is_key_pressed = false
                         } else {
-                            // Stay on this instruction until a key is pressed
                             self.program_counter = self.program_counter.wrapping_sub(2);
                         }
                     }
