@@ -43,6 +43,7 @@ pub struct Cpu {
     pub audio: Sink,
     pub to_draw: bool,
     pub is_mute: bool,
+    is_key_pressed: bool,
 }
 
 impl Cpu {
@@ -81,6 +82,7 @@ impl Cpu {
             audio: sink,
             to_draw: false,
             is_mute: false,
+            is_key_pressed: false,
         }
     }
 
@@ -117,20 +119,20 @@ impl Cpu {
                 // SE Vx, byte, skip next instruction if Vx == byte
                 let byte = (opcode & 0x00FF) as u8;
                 if self.registers[x] == byte {
-                    self.program_counter += 2;
+                    self.program_counter = self.program_counter.wrapping_add(2);
                 }
             }
             0x4000..=0x4FFF => {
                 // SNE Vx, byte, skip next instruction if Vx != byte
                 let byte = (opcode & 0x00FF) as u8;
                 if self.registers[x] != byte {
-                    self.program_counter += 2;
+                    self.program_counter = self.program_counter.wrapping_add(2);
                 }
             }
             0x5000..=0x5FFF => {
                 // SE Vx, Vy, skip next instruction if Vx == Vy
                 if self.registers[x] == self.registers[y] {
-                    self.program_counter += 2;
+                    self.program_counter = self.program_counter.wrapping_add(2);
                 }
             }
             0x6000..=0x6FFF => {
@@ -203,7 +205,7 @@ impl Cpu {
             0x9000..=0x9FFF => {
                 // SNE Vx, Vy, skip next instruction if Vx != Vy
                 if self.registers[x] != self.registers[y] {
-                    self.program_counter += 2;
+                    self.program_counter = self.program_counter.wrapping_add(2);
                 }
             }
             0xA000..=0xAFFF => {
@@ -255,13 +257,13 @@ impl Cpu {
                     0x9E => {
                         // SKP Vx, skip next instruction if key Vx is pressed
                         if self.input_keys[self.registers[x] as usize] {
-                            self.program_counter += 2;
+                            self.program_counter = self.program_counter.wrapping_add(2);
                         }
                     }
                     0xA1 => {
                         // SKP Vx, skip next instruction if key Vx is NOT pressed
                         if !self.input_keys[self.registers[x] as usize] {
-                            self.program_counter += 2;
+                            self.program_counter = self.program_counter.wrapping_add(2);
                         }
                     }
                     _ => unreachable!("opcode {:X}", opcode),
@@ -275,17 +277,19 @@ impl Cpu {
                     }
                     0x0A => {
                         // Fx0A - LD Vx, K, Wait for a key press, store the value of the key in Vx.
-                        let mut key_pressed = false;
                         for index in 0..16 {
-                            if self.input_keys[index] && !self.previous_input_keys[index] {
+                            if self.input_keys[index] {
                                 self.registers[x] = index as u8;
-                                key_pressed = true;
+                                self.is_key_pressed = true;
                                 break;
                             }
                         }
 
-                        if !key_pressed {
-                            self.program_counter -= 2; // Stay on this instruction
+                        if self.is_key_pressed && self.input_keys.iter().all(|x| !x) {
+                            self.is_key_pressed = false
+                        } else {
+                            // Stay on this instruction until a key is pressed
+                            self.program_counter = self.program_counter.wrapping_sub(2);
                         }
                     }
                     0x15 => {
@@ -298,7 +302,8 @@ impl Cpu {
                     }
                     0x1E => {
                         // ADD I, Vx, Set I = I + Vx.
-                        self.index_register += self.registers[x] as u16;
+                        self.index_register =
+                            self.index_register.wrapping_add(self.registers[x] as u16);
                     }
                     0x29 => {
                         // LD F, Vx, Set I = location of sprite for digit Vx.
@@ -345,7 +350,7 @@ impl Cpu {
     pub fn execute_instruction(&mut self) {
         self.current_opcode = (self.memory[self.program_counter as usize] as u16) << 8
             | self.memory[self.program_counter as usize + 1] as u16;
-        self.program_counter += 2;
+        self.program_counter = self.program_counter.wrapping_add(2);
         self.parse_opcode(self.current_opcode);
     }
 
