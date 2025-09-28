@@ -110,9 +110,9 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Only request frequent repaints when running
         if !self.is_paused {
-            ctx.request_repaint_after(std::time::Duration::from_millis(16)); // 60Hz when running
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
         } else {
-            ctx.request_repaint_after(std::time::Duration::from_millis(100)); // 10Hz when paused
+            ctx.request_repaint_after(std::time::Duration::from_secs(100));
         }
 
         // --- Keyboard input ---
@@ -127,9 +127,6 @@ impl eframe::App for App {
             for _ in 0..self.cycles {
                 self.cpu.execute_instruction();
             }
-            
-            // Add a small yield to prevent 100% CPU usage
-            std::thread::sleep(std::time::Duration::from_micros(100));
         }
 
         // --- Timers ---
@@ -158,7 +155,7 @@ impl eframe::App for App {
         egui::SidePanel::left("left_panel")
             .resizable(true)
             .default_width(panel_width)
-            .width_range(0.0..=200.0)
+            .width_range(0.0..=220.0)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     // Control buttons
@@ -193,7 +190,7 @@ impl eframe::App for App {
                     // Speed control with slider
                     ui.label("Speed:");
                     let mut speed = self.cycles as f32;
-                    ui.add(egui::Slider::new(&mut speed, 1.0..=20.0)
+                    ui.add(egui::Slider::new(&mut speed, 1.0..=1000.0)
                         .logarithmic(true)
                         .text("cycles")
                         .show_value(true));
@@ -210,7 +207,7 @@ impl eframe::App for App {
                         .show(ui, |ui| {
                             for (i, reg) in self.cpu.registers.iter().enumerate() {
                                 ui.label(egui::RichText::new(format!("V{:X}:{:02X}", i, reg))
-                                    .size(12.0)
+                                    .size(14.0)
                                     .monospace());
                                 if (i + 1) % 4 == 0 {
                                     ui.end_row();
@@ -225,14 +222,14 @@ impl eframe::App for App {
                         .num_columns(2)
                         .spacing([8.0, 2.0])
                         .show(ui, |ui| {
-                            ui.small(format!("I:{:04X}", self.cpu.index_register));
-                            ui.small(format!("PC:{:04X}", self.cpu.program_counter));
+                            ui.label(egui::RichText::new(format!("I:{:04X}", self.cpu.index_register)).size(14.0).monospace());
+                            ui.label(egui::RichText::new(format!("PC:{:04X}", self.cpu.program_counter)).size(14.0).monospace());
                             ui.end_row();
-                            ui.small(format!("SP:{}", self.cpu.stack_pointer));
-                            ui.small(format!("OP:{:04X}", self.cpu.current_opcode));
+                            ui.label(egui::RichText::new(format!("SP:{}", self.cpu.stack_pointer)).size(14.0).monospace());
+                            ui.label(egui::RichText::new(format!("OP:{:04X}", self.cpu.current_opcode)).size(14.0).monospace());
                             ui.end_row();
-                            ui.small(format!("DT:{}", self.cpu.delay_timer));
-                            ui.small(format!("ST:{}", self.cpu.sound_timer));
+                            ui.label(egui::RichText::new(format!("DT:{}", self.cpu.delay_timer)).size(14.0).monospace());
+                            ui.label(egui::RichText::new(format!("ST:{}", self.cpu.sound_timer)).size(14.0).monospace());
                         });
 
                     ui.separator();
