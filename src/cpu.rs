@@ -180,8 +180,9 @@ impl Cpu {
                     }
                     0x6 => {
                         // SHR Vx {, Vy}, Vx = Vy >> 1, VF = carry
-                        self.registers[0xF] = self.registers[y] & 0x1;
+                        let carry = self.registers[y] & 0x1;
                         self.registers[x] = self.registers[y] >> 1;
+                        self.registers[0xF] = carry;
                     }
                     0x7 => {
                         // SUBN Vx, Vy, Vx = Vy - Vx, VF = !borrow
@@ -192,8 +193,9 @@ impl Cpu {
                     }
                     0xE => {
                         // SHL Vx {, Vy}, Vx = Vy << 1, VF = carry
-                        self.registers[0xF] = (self.registers[y] & 0x80) >> 7;
+                        let carry = (self.registers[y] & 0x80) >> 7;
                         self.registers[x] = self.registers[y] << 1;
+                        self.registers[0xF] = carry;
                     }
                     _ => unreachable!("opcode {:X}", opcode),
                 }
