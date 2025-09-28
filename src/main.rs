@@ -1,5 +1,6 @@
 use clap::Parser;
 use eframe::egui;
+use egui::Key;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -9,13 +10,9 @@ mod configs;
 mod cpu;
 mod rand;
 
-use configs::{HEIGHT, PROGRAM_START_ADDRESS, WIDTH};
+use configs::{HEIGHT, PROGRAM_START_ADDRESS, WIDTH, FONTSET_START_ADDRESS};
 use cpu::Cpu;
 
-/// Map CHIP-8 keys to egui keys
-use egui::Key;
-
-use crate::configs::FONTSET_START_ADDRESS;
 const KEY_MAP: [(usize, Key); 16] = [
     (0x0, Key::X),
     (0x1, Key::Num1),
@@ -108,11 +105,12 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Only request frequent repaints when running
+        // Only request frequent repaints when running to avoid
+        // OS complaining about application not responding.
         if !self.is_paused {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         } else {
-            ctx.request_repaint_after(std::time::Duration::from_secs(100));
+            ctx.request_repaint_after(std::time::Duration::from_secs(1000));
         }
 
         // --- Keyboard input ---
@@ -190,10 +188,12 @@ impl eframe::App for App {
                     // Speed control with slider
                     ui.label("Speed:");
                     let mut speed = self.cycles as f32;
-                    ui.add(egui::Slider::new(&mut speed, 1.0..=1000.0)
-                        .logarithmic(true)
-                        .text("cycles")
-                        .show_value(true));
+                    ui.add(
+                        egui::Slider::new(&mut speed, 1.0..=1000.0)
+                            .logarithmic(true)
+                            .text("cycles")
+                            .show_value(true),
+                    );
                     self.cycles = speed as u64;
                     ui.small(format!("{}x speed", self.cycles));
 
@@ -206,9 +206,11 @@ impl eframe::App for App {
                         .spacing([8.0, 2.0])
                         .show(ui, |ui| {
                             for (i, reg) in self.cpu.registers.iter().enumerate() {
-                                ui.label(egui::RichText::new(format!("V{:X}:{:02X}", i, reg))
-                                    .size(14.0)
-                                    .monospace());
+                                ui.label(
+                                    egui::RichText::new(format!("V{:X}:{:02X}", i, reg))
+                                        .size(14.0)
+                                        .monospace(),
+                                );
                                 if (i + 1) % 4 == 0 {
                                     ui.end_row();
                                 }
@@ -222,14 +224,38 @@ impl eframe::App for App {
                         .num_columns(2)
                         .spacing([8.0, 2.0])
                         .show(ui, |ui| {
-                            ui.label(egui::RichText::new(format!("I:{:04X}", self.cpu.index_register)).size(14.0).monospace());
-                            ui.label(egui::RichText::new(format!("PC:{:04X}", self.cpu.program_counter)).size(14.0).monospace());
+                            ui.label(
+                                egui::RichText::new(format!("I:{:04X}", self.cpu.index_register))
+                                    .size(14.0)
+                                    .monospace(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("PC:{:04X}", self.cpu.program_counter))
+                                    .size(14.0)
+                                    .monospace(),
+                            );
                             ui.end_row();
-                            ui.label(egui::RichText::new(format!("SP:{}", self.cpu.stack_pointer)).size(14.0).monospace());
-                            ui.label(egui::RichText::new(format!("OP:{:04X}", self.cpu.current_opcode)).size(14.0).monospace());
+                            ui.label(
+                                egui::RichText::new(format!("SP:{}", self.cpu.stack_pointer))
+                                    .size(14.0)
+                                    .monospace(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("OP:{:04X}", self.cpu.current_opcode))
+                                    .size(14.0)
+                                    .monospace(),
+                            );
                             ui.end_row();
-                            ui.label(egui::RichText::new(format!("DT:{}", self.cpu.delay_timer)).size(14.0).monospace());
-                            ui.label(egui::RichText::new(format!("ST:{}", self.cpu.sound_timer)).size(14.0).monospace());
+                            ui.label(
+                                egui::RichText::new(format!("DT:{}", self.cpu.delay_timer))
+                                    .size(14.0)
+                                    .monospace(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("ST:{}", self.cpu.sound_timer))
+                                    .size(14.0)
+                                    .monospace(),
+                            );
                         });
 
                     ui.separator();
@@ -263,7 +289,7 @@ impl eframe::App for App {
                         });
                     }
 
-                    // --- STACK SECTION (moved from top panel) ---
+                    // --- STACK SECTION ---
                     ui.separator();
                     ui.heading("Stack");
 
@@ -370,7 +396,7 @@ impl eframe::App for App {
                 });
             });
 
-        // --- BOTTOM PANEL: Instructions/Disassembly (expanded) ---
+        // --- BOTTOM PANEL: Instructions/Disassembly ---
         egui::TopBottomPanel::bottom("bottom_panel")
             .resizable(true)
             .default_height(150.0)
@@ -378,9 +404,6 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.heading("Instructions");
-                    if ui.button("Follow PC").clicked() {
-                        // Auto-scroll will happen in the scroll area below
-                    }
                 });
 
                 egui::ScrollArea::vertical()
@@ -405,7 +428,7 @@ impl eframe::App for App {
                                         egui::Color32::WHITE
                                     };
 
-                                    // Add background highlight for current instruction
+                                    // Add yellowish background highlight for current instxn
                                     if is_current {
                                         ui.painter().rect_filled(
                                             ui.available_rect_before_wrap(),
@@ -418,7 +441,6 @@ impl eframe::App for App {
 
                                     ui.separator();
 
-                                    // Simple instruction decoding with expanded format
                                     let instruction = match opcode & 0xF000 {
                                         0x0000 => match opcode {
                                             0x00E0 => "CLS              ; Clear display".to_string(),
@@ -486,7 +508,7 @@ impl eframe::App for App {
                     });
             });
 
-        // --- CENTER PANEL: Chip-8 Display (smaller) ---
+        // --- CENTER PANEL: Chip-8 Display ---
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(tex) = &self.texture {
                 let available_rect = ui.available_rect_before_wrap();
@@ -503,6 +525,7 @@ impl eframe::App for App {
                 // Center the display
                 let center_pos = available_rect.center() - display_size / 2.0;
 
+                // TODO: move to newer egui function
                 ui.allocate_ui_at_rect(egui::Rect::from_min_size(center_pos, display_size), |ui| {
                     ui.image((tex.id(), display_size));
                 });

@@ -28,7 +28,7 @@ pub struct Cpu {
     pub memory: [u8; 4096],
     pub index_register: u16,
     pub program_counter: u16,
-    pub stack: [u16; 16], // 16 levels
+    pub stack: [u16; 16], // 16 levels of stack
     pub stack_pointer: u8,
     pub delay_timer: u8,
     pub sound_timer: u8,
@@ -38,7 +38,7 @@ pub struct Cpu {
     pub current_opcode: u16,
 
     // These fields aren't cpu specific,
-    // They are instead helper fields.
+    // but I am using them as helper fields
     pub lcg: Lcg,
     pub audio: Sink,
     pub to_draw: bool,
@@ -179,7 +179,7 @@ impl Cpu {
                         self.registers[0xF] = !overflow as u8;
                     }
                     0x6 => {
-                        // SHR Vx {, Vy}, Vx >>= 1, VF = carry
+                        // SHR Vx {, Vy}, Vx = Vy >> 1, VF = carry
                         self.registers[0xF] = self.registers[y] & 0x1;
                         self.registers[x] = self.registers[y] >> 1;
                     }
@@ -191,7 +191,7 @@ impl Cpu {
                         self.registers[0xF] = !overflow as u8;
                     }
                     0xE => {
-                        // SHL Vx {, Vy}, Vx <<= 1, VF = carry
+                        // SHL Vx {, Vy}, Vx = Vy << 1, VF = carry
                         self.registers[0xF] = (self.registers[y] & 0x80) >> 7;
                         self.registers[x] = self.registers[y] << 1;
                     }
