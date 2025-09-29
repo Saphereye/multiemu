@@ -120,19 +120,19 @@ impl eframe::App for App {
             }
         });
 
-        // --- Execute instructions (only if not paused) ---
-        if !self.is_paused {
-            for _ in 0..self.cycles {
-                self.cpu.execute_instruction();
-            }
-        }
-
         // --- Timers ---
         if !self.is_paused {
             let now = Instant::now();
             if now.duration_since(self.last_timer_update) >= self.timer_period {
                 self.cpu.update_timers();
                 self.last_timer_update = now;
+            }
+        }
+
+        // --- Execute instructions (only if not paused) ---
+        if !self.is_paused {
+            for _ in 0..self.cycles {
+                self.cpu.execute_instruction();
             }
         }
 

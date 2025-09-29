@@ -97,7 +97,10 @@ impl Cpu {
             }
             0x00EE => {
                 // RET, return from subroutine
-                self.stack_pointer -= 1;
+
+                // TODO: this will wrap to 255,
+                // but our stack size is 16
+                self.stack_pointer = self.stack_pointer.wrapping_sub(1);
                 self.program_counter = self.stack[self.stack_pointer as usize];
             }
             0x1000..=0x1FFF => {
