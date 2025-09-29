@@ -32,7 +32,7 @@ pub struct Cpu {
     pub stack_pointer: u8,
     pub delay_timer: u8,
     pub sound_timer: u8,
-    pub input_keys: [bool; 16], // true if nth key is pressed
+    pub input_keys: [bool; 16],         // true if nth key is pressed
     pub buffer: [bool; WIDTH * HEIGHT], // true if pixel is on
     pub current_opcode: u16,
 
@@ -86,10 +86,7 @@ impl Cpu {
 
     /// Parses the opcode and executes the instruction.
     ///
-    /// Uses the CHIP-8 instruction set. A
-    ///
-    /// # Panics
-    /// If the input instruction is not a valid CHIP-8 instruction, unreachable!() is called.
+    /// Uses the CHIP-8 instruction set.
     fn parse_opcode(&mut self, opcode: u16) {
         let x = ((opcode & 0x0F00) >> 8) as usize;
         let y = ((opcode & 0x00F0) >> 4) as usize;
@@ -129,7 +126,11 @@ impl Cpu {
             }
             0x5000..=0x5FFF => {
                 // SE Vx, Vy, skip next instruction if Vx == Vy
-                if self.registers[x] == self.registers[y] {
+
+                // Check if last nibble is 0
+                if opcode & 0x1 != 0 {
+                    eprintln!("Unrecognized opcode {:X}", opcode);
+                } else if self.registers[x] == self.registers[y] {
                     self.program_counter = self.program_counter.wrapping_add(2);
                 }
             }
@@ -197,12 +198,16 @@ impl Cpu {
                         self.registers[x] = self.registers[y] << 1;
                         self.registers[0xF] = carry;
                     }
-                    _ => unreachable!("opcode {:X}", opcode),
+                    _ => eprintln!("Unrecognized opcode {:X}", opcode),
                 }
             }
             0x9000..=0x9FFF => {
                 // SNE Vx, Vy, skip next instruction if Vx != Vy
-                if self.registers[x] != self.registers[y] {
+
+                // Check if last nibble is 0
+                if opcode & 0x1 != 0 {
+                    eprintln!("Unrecognized opcode {:X}", opcode);
+                } else if self.registers[x] != self.registers[y] {
                     self.program_counter = self.program_counter.wrapping_add(2);
                 }
             }
@@ -264,7 +269,7 @@ impl Cpu {
                             self.program_counter = self.program_counter.wrapping_add(2);
                         }
                     }
-                    _ => unreachable!("opcode {:X}", opcode),
+                    _ => eprintln!("Unrecognized opcode {:X}", opcode),
                 }
             }
             0xF000..=0xFFFF => {
@@ -337,10 +342,10 @@ impl Cpu {
                         }
                         self.index_register += 1 + x as u16;
                     }
-                    _ => unreachable!("opcode {:X}", opcode),
+                    _ => eprintln!("Unrecognized opcode {:X}", opcode),
                 }
             }
-            _ => unreachable!("opcode {:X}", opcode),
+            _ => eprintln!("Unrecognized opcode {:X}", opcode),
         }
     }
 
