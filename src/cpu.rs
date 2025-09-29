@@ -40,7 +40,6 @@ pub struct Cpu {
     // but I am using them as helper fields
     pub lcg: Lcg,
     pub audio: Sink,
-    pub to_draw: bool,
     pub is_mute: bool,
     is_key_pressed: bool,
 }
@@ -78,7 +77,6 @@ impl Cpu {
             // Entropy: 7.366bits, where 8 bits is optimal
             lcg: Lcg::new(75, 1, 31),
             audio: sink,
-            to_draw: false,
             is_mute: false,
             is_key_pressed: false,
         }
@@ -255,8 +253,6 @@ impl Cpu {
                         }
                     }
                 }
-
-                self.to_draw = true;
             }
             0xE000..=0xEFFF => {
                 match opcode & 0x00FF {

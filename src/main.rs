@@ -137,10 +137,7 @@ impl eframe::App for App {
         }
 
         // --- Redraw display if needed ---
-        if self.cpu.to_draw {
-            self.update_texture(ctx);
-            self.cpu.to_draw = false;
-        }
+        self.update_texture(ctx);
 
         // Get available screen size for responsive design
         let screen_rect = ctx.screen_rect();
@@ -178,7 +175,6 @@ impl eframe::App for App {
                             self.cpu.sound_timer = 0;
                             self.cpu.registers = [0; 16];
                             self.cpu.buffer = [false; WIDTH * HEIGHT];
-                            self.cpu.to_draw = true;
                             self.is_paused = true;
                         }
                     });
