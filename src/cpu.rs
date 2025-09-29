@@ -1,6 +1,7 @@
 use crate::configs::{FONTSET_START_ADDRESS, HEIGHT, PROGRAM_START_ADDRESS, WIDTH};
 use crate::rand::Lcg;
 use raplay::{source::Sine, Sink};
+use thiserror::Error;
 
 /// The CHIP-8 font set.
 const FONT_SET: [u8; 80] = [
@@ -21,6 +22,34 @@ const FONT_SET: [u8; 80] = [
     0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
     0xF0, 0x80, 0xF0, 0x80, 0x80, // F
 ];
+
+#[derive(Debug, Error)]
+pub enum CpuError {
+    #[error("Unrecognized opcode {opcode:#06X} at PC={pc:#06X}")]
+    UnrecognizedOpcode { opcode: u16, pc: u16 },
+
+    #[error("Invalid usage of opcode {opcode:#06X} at PC={pc:#06X} (hint: {hint}.)")]
+    InvalidUsageOfOpcode {
+        opcode: u16,
+        pc: u16,
+        hint: &'static str,
+    },
+
+    #[error("Invalid memory access at {addr:#06X} (PC={pc:#06X})")]
+    InvalidMemoryAccess { addr: u16, pc: u16 },
+
+    #[error("Invalid register V{reg:?} at PC={pc:#06X}")]
+    InvalidRegister { reg: usize, pc: u16 },
+
+    #[error("Invalid stack access SP={sp:#04X} at PC={pc:#06X}")]
+    InvalidStackAccess { sp: u8, pc: u16 },
+
+    #[error("Invalid indexing: Vx={vx:#04X}, at PC={pc:#06X}")]
+    InvalidIndexing { vx: u8, pc: u16 },
+
+    #[error("Invalid key register V{reg:?}={reg_val:#04X} at PC={pc:#06X}")]
+    InvalidKeyRegister { reg: u8, reg_val: u8, pc: u16 },
+}
 
 /// Implementation of the Chip-8 CPU
 pub struct Cpu {
@@ -83,9 +112,11 @@ impl Cpu {
     }
 
     /// Parses the opcode and executes the instruction.
+    /// On error, the execution of the incorrect opcode is halted
+    /// and an error is sent to callee.
     ///
-    /// Uses the CHIP-8 instruction set.
-    fn parse_opcode(&mut self, opcode: u16) {
+    /// In case of error the callee has to deal with updating the PC.
+    fn parse_opcode(&mut self, opcode: u16) -> Result<(), CpuError> {
         let x = ((opcode & 0x0F00) >> 8) as usize;
         let y = ((opcode & 0x00F0) >> 4) as usize;
         match opcode {
@@ -96,10 +127,17 @@ impl Cpu {
             0x00EE => {
                 // RET, return from subroutine
 
-                // TODO: this will wrap to 255,
-                // but our stack size is 16
-                self.stack_pointer = self.stack_pointer.wrapping_sub(1);
-                self.program_counter = self.stack[self.stack_pointer as usize];
+                let subtracted_stack_pointer = self.stack_pointer.wrapping_sub(1);
+
+                if (0..16).contains(&subtracted_stack_pointer) {
+                    self.stack_pointer = self.stack_pointer.wrapping_sub(1);
+                    self.program_counter = self.stack[self.stack_pointer as usize];
+                } else {
+                    return Err(CpuError::InvalidStackAccess {
+                        sp: subtracted_stack_pointer,
+                        pc: self.program_counter,
+                    });
+                }
             }
             0x1000..=0x1FFF => {
                 // JP addr, target address = opcode & 0x0FFF
@@ -107,9 +145,16 @@ impl Cpu {
             }
             0x2000..=0x2FFF => {
                 // CALL addr, target address = opcode & 0x0FFF
-                self.stack[self.stack_pointer as usize] = self.program_counter;
-                self.stack_pointer += 1;
-                self.program_counter = opcode & 0x0FFF;
+                if (0..16).contains(&self.stack_pointer) {
+                    self.stack[self.stack_pointer as usize] = self.program_counter;
+                    self.stack_pointer += 1;
+                    self.program_counter = opcode & 0x0FFF;
+                } else {
+                    return Err(CpuError::InvalidStackAccess {
+                        sp: self.stack_pointer,
+                        pc: self.program_counter,
+                    });
+                }
             }
             0x3000..=0x3FFF => {
                 // SE Vx, byte, skip next instruction if Vx == byte
@@ -130,7 +175,11 @@ impl Cpu {
 
                 // Check if last nibble is 0
                 if opcode & 0x1 != 0 {
-                    eprintln!("Unrecognized opcode {:X}", opcode);
+                    return Err(CpuError::InvalidUsageOfOpcode {
+                        opcode,
+                        pc: self.program_counter,
+                        hint: "Set last nibble to 0",
+                    });
                 } else if self.registers[x] == self.registers[y] {
                     self.program_counter = self.program_counter.wrapping_add(2);
                 }
@@ -199,7 +248,13 @@ impl Cpu {
                         self.registers[x] = self.registers[y] << 1;
                         self.registers[0xF] = carry;
                     }
-                    _ => eprintln!("Unrecognized opcode {:X}", opcode),
+                    _ => {
+                        return Err(CpuError::InvalidUsageOfOpcode {
+                            opcode,
+                            pc: self.program_counter,
+                            hint: "Set last nibble to 0, 1, 2, 3, 4, 5, 6, 7 or E",
+                        });
+                    }
                 }
             }
             0x9000..=0x9FFF => {
@@ -207,7 +262,11 @@ impl Cpu {
 
                 // Check if last nibble is 0
                 if opcode & 0x1 != 0 {
-                    eprintln!("Unrecognized opcode {:X}", opcode);
+                    return Err(CpuError::InvalidUsageOfOpcode {
+                        opcode,
+                        pc: self.program_counter,
+                        hint: "Set last nibble to 0",
+                    });
                 } else if self.registers[x] != self.registers[y] {
                     self.program_counter = self.program_counter.wrapping_add(2);
                 }
@@ -258,17 +317,43 @@ impl Cpu {
                 match opcode & 0x00FF {
                     0x9E => {
                         // SKP Vx, skip next instruction if key Vx is pressed
-                        if self.input_keys[self.registers[x] as usize] {
-                            self.program_counter = self.program_counter.wrapping_add(2);
+                        let x_val = self.registers[x];
+
+                        if (0..16).contains(&x_val) {
+                            if self.input_keys[x_val as usize] {
+                                self.program_counter = self.program_counter.wrapping_add(2);
+                            }
+                        } else {
+                            return Err(CpuError::InvalidKeyRegister {
+                                reg: x as u8,
+                                reg_val: x_val,
+                                pc: self.program_counter,
+                            });
                         }
                     }
                     0xA1 => {
                         // SKP Vx, skip next instruction if key Vx is NOT pressed
-                        if !self.input_keys[self.registers[x] as usize] {
-                            self.program_counter = self.program_counter.wrapping_add(2);
+                        let x_val = self.registers[x];
+
+                        if (0..16).contains(&x_val) {
+                            if !self.input_keys[x_val as usize] {
+                                self.program_counter = self.program_counter.wrapping_add(2);
+                            }
+                        } else {
+                            return Err(CpuError::InvalidKeyRegister {
+                                reg: x as u8,
+                                reg_val: x_val,
+                                pc: self.program_counter,
+                            });
                         }
                     }
-                    _ => eprintln!("Unrecognized opcode {:X}", opcode),
+                    _ => {
+                        return Err(CpuError::InvalidUsageOfOpcode {
+                            opcode,
+                            pc: self.program_counter,
+                            hint: "For Ex prefix, only 9E and A1 suffix are supported",
+                        });
+                    }
                 }
             }
             0xF000..=0xFFFF => {
@@ -309,7 +394,17 @@ impl Cpu {
                     }
                     0x29 => {
                         // LD F, Vx, Set I = location of sprite for digit Vx.
-                        self.index_register = FONTSET_START_ADDRESS + self.registers[x] as u16 * 5;
+                        let index_val = FONTSET_START_ADDRESS + self.registers[x] as u16 * 5;
+
+                        if (0..4096).contains(&index_val) {
+                            self.index_register =
+                                FONTSET_START_ADDRESS + self.registers[x] as u16 * 5;
+                        } else {
+                            return Err(CpuError::InvalidIndexing {
+                                vx: self.registers[x],
+                                pc: self.program_counter,
+                            });
+                        }
                     }
                     0x33 => {
                         // LD B, Vx, Store BCD representation of Vx in memory locations I, I+1, and I+2.
@@ -341,11 +436,24 @@ impl Cpu {
                         }
                         self.index_register += 1 + x as u16;
                     }
-                    _ => eprintln!("Unrecognized opcode {:X}", opcode),
+                    _ => {
+                        return Err(CpuError::InvalidUsageOfOpcode {
+                            opcode,
+                            pc: self.program_counter,
+                            hint: "For Fx prefix, only 07, 0A, 15, 18, 1E, 29, 33, 55 and 65 suffix are supported",
+                        });
+                    }
                 }
             }
-            _ => eprintln!("Unrecognized opcode {:X}", opcode),
+            _ => {
+                return Err(CpuError::UnrecognizedOpcode {
+                    opcode,
+                    pc: self.program_counter,
+                });
+            }
         }
+
+        Ok(())
     }
 
     /// Simulates one execution cycle of the cpu.
@@ -353,7 +461,12 @@ impl Cpu {
         self.current_opcode = (self.memory[self.program_counter as usize] as u16) << 8
             | self.memory[self.program_counter as usize + 1] as u16;
         self.program_counter = self.program_counter.wrapping_add(2);
-        self.parse_opcode(self.current_opcode);
+        if let Err(e) = self.parse_opcode(self.current_opcode) {
+            eprintln!("{}", e);
+
+            // Skip erroneous opcode
+            self.program_counter = self.program_counter.wrapping_add(2);
+        }
     }
 
     /// If delay_timer or sound_timer are greater than 0, they are decremented by 1.

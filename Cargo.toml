@@ -10,3 +10,4 @@ clap = { version = "4.5.48", features = ["derive"] }
 eframe = "0.32.3"
 egui = "0.32.3"
 raplay = "0.4.3"
+thiserror = "2.0.17"
