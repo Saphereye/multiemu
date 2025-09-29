@@ -288,23 +288,30 @@ impl Cpu {
                 // DRW Vx, Vy, nibble, draw sprite at (Vx, Vy) with height nibble
                 // VF = collision
                 let height = (opcode & 0x000F) as usize;
-                let x_pos = self.registers[x] % WIDTH as u8;
-                let y_pos = self.registers[y] % HEIGHT as u8;
+                let x_pos = self.registers[x] as usize % WIDTH;
+                let y_pos = self.registers[y] as usize % HEIGHT;
                 self.registers[0xF] = 0;
 
                 for row in 0..height {
-                    if y_pos as usize + row >= HEIGHT {
-                        break;
-                    }
-                    let sprite_byte = self.memory[self.index_register as usize + row];
+                    let screen_y = (y_pos + row) % HEIGHT;
+
+                    let index = self.index_register as usize + row;
+                    let sprite_byte = if index < self.memory.len() {
+                        self.memory[index]
+                    } else {
+                        return Err(CpuError::InvalidIndexing {
+                            vx: self.registers[x],
+                            pc: self.program_counter,
+                        });
+                    };
+
                     for col in 0..8 {
-                        if x_pos as usize + col >= WIDTH {
-                            break;
-                        }
+                        let screen_x = (x_pos + col) % WIDTH;
+
                         let sprite_pixel = sprite_byte & (0x80 >> col);
-                        let screen_index = (y_pos as usize + row) * WIDTH + (x_pos as usize + col);
-                        let screen_pixel = &mut self.buffer[screen_index];
                         if sprite_pixel != 0 {
+                            let screen_index = screen_y * WIDTH + screen_x;
+                            let screen_pixel = &mut self.buffer[screen_index];
                             if *screen_pixel {
                                 self.registers[0xF] = 1;
                             }
@@ -394,9 +401,9 @@ impl Cpu {
                     }
                     0x29 => {
                         // LD F, Vx, Set I = location of sprite for digit Vx.
-                        let index_val = FONTSET_START_ADDRESS + self.registers[x] as u16 * 5;
+                        let index = FONTSET_START_ADDRESS + self.registers[x] as u16 * 5;
 
-                        if (0..4096).contains(&index_val) {
+                        if (0..4096).contains(&index) {
                             self.index_register =
                                 FONTSET_START_ADDRESS + self.registers[x] as u16 * 5;
                         } else {
