@@ -35,20 +35,11 @@ pub enum CpuError {
         hint: &'static str,
     },
 
-    #[error("Invalid memory access at {addr:#06X} (PC={pc:#06X})")]
-    InvalidMemoryAccess { addr: u16, pc: u16 },
-
-    #[error("Invalid register V{reg:?} at PC={pc:#06X}")]
-    InvalidRegister { reg: usize, pc: u16 },
-
     #[error("Invalid stack access SP={sp:#04X} at PC={pc:#06X}")]
     InvalidStackAccess { sp: u8, pc: u16 },
 
     #[error("Invalid indexing: Vx={vx:#04X}, at PC={pc:#06X}")]
     InvalidIndexing { vx: u8, pc: u16 },
-
-    #[error("Invalid key register V{reg:?}={reg_val:#04X} at PC={pc:#06X}")]
-    InvalidKeyRegister { reg: u8, reg_val: u8, pc: u16 },
 }
 
 /// Implementation of the Chip-8 CPU
@@ -117,6 +108,7 @@ impl Cpu {
     ///
     /// In case of error the callee has to deal with updating the PC.
     fn parse_opcode(&mut self, opcode: u16) -> Result<(), CpuError> {
+        log::debug!("Parsing opcode: {:#06X}", opcode);
         let x = ((opcode & 0x0F00) >> 8) as usize;
         let y = ((opcode & 0x00F0) >> 4) as usize;
         match opcode {
@@ -126,7 +118,6 @@ impl Cpu {
             }
             0x00EE => {
                 // RET, return from subroutine
-
                 let subtracted_stack_pointer = self.stack_pointer.wrapping_sub(1);
 
                 if (0..16).contains(&subtracted_stack_pointer) {
@@ -324,34 +315,26 @@ impl Cpu {
                 match opcode & 0x00FF {
                     0x9E => {
                         // SKP Vx, skip next instruction if key Vx is pressed
-                        let x_val = self.registers[x];
+                        if self.registers[x] > 15 {
+                            log::warn!("Vx value not in 0..=15 range: {:#06X}", self.registers[x]);
+                        }
 
-                        if (0..16).contains(&x_val) {
-                            if self.input_keys[x_val as usize] {
-                                self.program_counter = self.program_counter.wrapping_add(2);
-                            }
-                        } else {
-                            return Err(CpuError::InvalidKeyRegister {
-                                reg: x as u8,
-                                reg_val: x_val,
-                                pc: self.program_counter,
-                            });
+                        let x_val = self.registers[x] % 16;
+
+                        if self.input_keys[x_val as usize] {
+                            self.program_counter = self.program_counter.wrapping_add(2);
                         }
                     }
                     0xA1 => {
                         // SKP Vx, skip next instruction if key Vx is NOT pressed
-                        let x_val = self.registers[x];
+                        if self.registers[x] > 15 {
+                            log::warn!("Vx value not in 0..=15 range: {:#06X}", self.registers[x]);
+                        }
 
-                        if (0..16).contains(&x_val) {
-                            if !self.input_keys[x_val as usize] {
-                                self.program_counter = self.program_counter.wrapping_add(2);
-                            }
-                        } else {
-                            return Err(CpuError::InvalidKeyRegister {
-                                reg: x as u8,
-                                reg_val: x_val,
-                                pc: self.program_counter,
-                            });
+                        let x_val = self.registers[x] % 16;
+
+                        if !self.input_keys[x_val as usize] {
+                            self.program_counter = self.program_counter.wrapping_add(2);
                         }
                     }
                     _ => {
@@ -401,17 +384,19 @@ impl Cpu {
                     }
                     0x29 => {
                         // LD F, Vx, Set I = location of sprite for digit Vx.
-                        let index = FONTSET_START_ADDRESS + self.registers[x] as u16 * 5;
-
-                        if (0..4096).contains(&index) {
-                            self.index_register =
-                                FONTSET_START_ADDRESS + self.registers[x] as u16 * 5;
-                        } else {
-                            return Err(CpuError::InvalidIndexing {
-                                vx: self.registers[x],
-                                pc: self.program_counter,
-                            });
+                        if self.registers[x] > 15 {
+                            log::warn!("Vx value not in 0..=15 range: {:#06X}", self.registers[x]);
                         }
+
+                        let x_val = self.registers[x] % 16;
+                        let index = FONTSET_START_ADDRESS
+                            .wrapping_add((x_val as u16).wrapping_mul(5));
+
+                        if index > 4096 {
+                            log::warn!("Index value crossing 4KiB boundary: {:#06X}", index);
+                        }
+
+                        self.index_register = index % 4096;
                     }
                     0x33 => {
                         // LD B, Vx, Store BCD representation of Vx in memory locations I, I+1, and I+2.
@@ -464,16 +449,13 @@ impl Cpu {
     }
 
     /// Simulates one execution cycle of the cpu.
-    pub fn execute_instruction(&mut self) {
+    pub fn execute_instruction(&mut self) -> Result<(), CpuError> {
         self.current_opcode = (self.memory[self.program_counter as usize] as u16) << 8
             | self.memory[self.program_counter as usize + 1] as u16;
         self.program_counter = self.program_counter.wrapping_add(2);
-        if let Err(e) = self.parse_opcode(self.current_opcode) {
-            eprintln!("{}", e);
+        self.parse_opcode(self.current_opcode)?;
 
-            // Skip erroneous opcode
-            self.program_counter = self.program_counter.wrapping_add(2);
-        }
+        Ok(())
     }
 
     /// If delay_timer or sound_timer are greater than 0, they are decremented by 1.

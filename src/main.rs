@@ -34,8 +34,22 @@ const KEY_MAP: [(usize, Key); 16] = [
 
 fn load_rom(file_path: &Path) -> std::io::Result<Cpu> {
     let mut cpu = Cpu::new();
-    let mut file = File::open(file_path)?;
-    file.read(&mut cpu.memory[PROGRAM_START_ADDRESS as usize..])?;
+    let mut file = File::open(file_path)?; // propagate open errors
+
+    let rom_space = &mut cpu.memory[PROGRAM_START_ADDRESS as usize..];
+
+    // read returns Result<usize, io::Error>; '?' propagates any error automatically
+    let n = file.read(rom_space)?;
+
+    // check if the ROM is too large
+    if n > rom_space.len() {
+        log::error!(
+            "Inputs file is larger than {} bytes.",
+            rom_space.len()
+        );
+        std::process::exit(1);
+    }
+
     Ok(cpu)
 }
 
@@ -132,7 +146,10 @@ impl eframe::App for App {
         // --- Execute instructions (only if not paused) ---
         if !self.is_paused {
             for _ in 0..self.cycles {
-                self.cpu.execute_instruction();
+                self.cpu.execute_instruction().unwrap_or_else(|e| {
+                    log::error!("{}", e);
+                    std::process::exit(1);
+                });
             }
         }
 
@@ -735,8 +752,14 @@ impl eframe::App for App {
 }
 
 fn main() -> Result<(), eframe::Error> {
+    env_logger::init();
     let cli = Cli::parse();
-    let mut cpu = load_rom(&cli.file).expect("Failed to load ROM");
+
+    log::info!("Loading ROM: {}", &cli.file.display());
+    let mut cpu = load_rom(&cli.file).unwrap_or_else(|e| {
+        log::error!("{}", e);
+        std::process::exit(1);
+    });
     cpu.is_mute = cli.mute;
 
     let options = eframe::NativeOptions {
@@ -747,6 +770,7 @@ fn main() -> Result<(), eframe::Error> {
         ..Default::default()
     };
 
+    log::info!("Starting gui");
     eframe::run_native(
         "Chip-8",
         options,
