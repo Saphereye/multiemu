@@ -138,7 +138,38 @@ impl GameBoyEmulator {
             0xC000..=0xDFFF => self.memory[addr as usize], // Work RAM
             0xE000..=0xFDFF => self.memory[(addr - 0x2000) as usize], // Echo RAM
             0xFE00..=0xFE9F => self.oam[(addr - 0xFE00) as usize], // OAM
-            0xFF00..=0xFFFF => self.memory[addr as usize], // I/O and High RAM
+            0xFF00 => {
+                // Joypad register (P1) - Special handling for input
+                // Bit 7-6: Not used (always 1)
+                // Bit 5: P15 Select Button Keys (0=Select)
+                // Bit 4: P14 Select Direction Keys (0=Select)
+                // Bit 3-0: Input lines (0=Pressed, 1=Released)
+                
+                let p1 = self.memory[0xFF00];
+                let select_buttons = (p1 & 0x20) == 0;  // Bit 5
+                let select_dpad = (p1 & 0x10) == 0;     // Bit 4
+                
+                let mut result = p1 | 0x0F; // Set input bits high (released)
+                
+                if select_buttons {
+                    // Button keys: Start, Select, B, A (bits 3-0)
+                    if self.input_keys[2] { result &= !0x08; } // Start (bit 3)
+                    if self.input_keys[3] { result &= !0x04; } // Select (bit 2)
+                    if self.input_keys[1] { result &= !0x02; } // B (bit 1)
+                    if self.input_keys[0] { result &= !0x01; } // A (bit 0)
+                }
+                
+                if select_dpad {
+                    // Direction keys: Down, Up, Left, Right (bits 3-0)
+                    if self.input_keys[5] { result &= !0x08; } // Down (bit 3)
+                    if self.input_keys[4] { result &= !0x04; } // Up (bit 2)
+                    if self.input_keys[6] { result &= !0x02; } // Left (bit 1)
+                    if self.input_keys[7] { result &= !0x01; } // Right (bit 0)
+                }
+                
+                result | 0xC0 // Set unused bits to 1
+            },
+            0xFF01..=0xFFFF => self.memory[addr as usize], // I/O and High RAM
             _ => 0xFF,
         }
     }
