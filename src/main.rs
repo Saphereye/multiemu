@@ -4,7 +4,8 @@ use std::time::{Duration, Instant};
 
 mod emulators;
 
-use emulators::chip8::{Chip8Emulator, Chip8Metadata};
+use emulators::chip8::Chip8Emulator;
+use emulators::gameboy::GameBoyEmulator;
 use emulators::Emulator;
 
 
@@ -21,8 +22,78 @@ struct Cli {
     mute: bool,
 }
 
+enum EmulatorType {
+    Chip8(Box<Chip8Emulator>),
+    GameBoy(Box<GameBoyEmulator>),
+}
+
+impl EmulatorType {
+    fn system_name(&self) -> &'static str {
+        match self {
+            EmulatorType::Chip8(emu) => emu.system_name(),
+            EmulatorType::GameBoy(emu) => emu.system_name(),
+        }
+    }
+
+    fn load_rom(&mut self, path: &std::path::Path) -> Result<(), emulators::EmuError> {
+        match self {
+            EmulatorType::Chip8(emu) => emu.load_rom(path),
+            EmulatorType::GameBoy(emu) => emu.load_rom(path),
+        }
+    }
+
+    fn reset(&mut self) {
+        match self {
+            EmulatorType::Chip8(emu) => emu.reset(),
+            EmulatorType::GameBoy(emu) => emu.reset(),
+        }
+    }
+
+    fn step(&mut self) -> Result<(), emulators::EmuError> {
+        match self {
+            EmulatorType::Chip8(emu) => emu.step(),
+            EmulatorType::GameBoy(emu) => emu.step(),
+        }
+    }
+
+    fn update_timers(&mut self, delta: Duration) {
+        match self {
+            EmulatorType::Chip8(emu) => emu.update_timers(delta),
+            EmulatorType::GameBoy(emu) => emu.update_timers(delta),
+        }
+    }
+
+    fn framebuffer(&self) -> &[u32] {
+        match self {
+            EmulatorType::Chip8(emu) => emu.framebuffer(),
+            EmulatorType::GameBoy(emu) => emu.framebuffer(),
+        }
+    }
+
+    fn resolution(&self) -> (usize, usize) {
+        match self {
+            EmulatorType::Chip8(emu) => emu.resolution(),
+            EmulatorType::GameBoy(emu) => emu.resolution(),
+        }
+    }
+
+    fn set_input_state(&mut self, inputs: &[bool]) {
+        match self {
+            EmulatorType::Chip8(emu) => emu.set_input_state(inputs),
+            EmulatorType::GameBoy(emu) => emu.set_input_state(inputs),
+        }
+    }
+
+    fn keymap(&self) -> Vec<(usize, String)> {
+        match self {
+            EmulatorType::Chip8(emu) => emu.keymap(),
+            EmulatorType::GameBoy(emu) => emu.keymap(),
+        }
+    }
+}
+
 pub struct App {
-    emulator: Box<dyn Emulator<Metadata = Chip8Metadata>>,
+    emulator: EmulatorType,
     cycles: u64,
     texture: Option<egui::TextureHandle>,
     last_timer_update: Instant,
@@ -39,7 +110,7 @@ impl App {
         emulator.set_mute(mute);
         
         Self {
-            emulator: Box::new(emulator),
+            emulator: EmulatorType::Chip8(Box::new(emulator)),
             cycles,
             texture: None,
             last_timer_update: Instant::now(),
@@ -49,6 +120,24 @@ impl App {
             selected_emulator: "CHIP-8".to_string(),
             rom_path: None,
         }
+    }
+
+    fn switch_emulator(&mut self, emulator_name: &str) {
+        match emulator_name {
+            "CHIP-8" => {
+                let mut emu = Chip8Emulator::new();
+                emu.set_mute(false); // TODO: preserve mute state
+                self.emulator = EmulatorType::Chip8(Box::new(emu));
+            }
+            "Game Boy" => {
+                let emu = GameBoyEmulator::new();
+                self.emulator = EmulatorType::GameBoy(Box::new(emu));
+            }
+            _ => {}
+        }
+        self.texture = None; // Clear texture when switching
+        self.rom_path = None;
+        self.is_paused = true;
     }
 
     fn update_texture(&mut self, ctx: &egui::Context) {
@@ -159,16 +248,24 @@ impl eframe::App for App {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     // Emulator selector dropdown
                     ui.heading("Emulator");
+                    let current_emulator = self.selected_emulator.clone();
                     egui::ComboBox::from_label("")
                         .selected_text(&self.selected_emulator)
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(
+                            if ui.selectable_value(
                                 &mut self.selected_emulator,
                                 "CHIP-8".to_string(),
                                 "CHIP-8",
-                            );
-                            // Future emulators can be added here
-                            // ui.selectable_value(&mut self.selected_emulator, "Game Boy".to_string(), "Game Boy");
+                            ).clicked() && current_emulator != "CHIP-8" {
+                                self.switch_emulator("CHIP-8");
+                            }
+                            if ui.selectable_value(
+                                &mut self.selected_emulator,
+                                "Game Boy".to_string(),
+                                "Game Boy",
+                            ).clicked() && current_emulator != "Game Boy" {
+                                self.switch_emulator("Game Boy");
+                            }
                         });
 
                     ui.separator();
@@ -176,8 +273,14 @@ impl eframe::App for App {
                     // ROM file selector
                     ui.heading("ROM File");
                     if ui.button("📁 Load ROM").clicked() {
+                        let extensions = match self.selected_emulator.as_str() {
+                            "CHIP-8" => vec!["ch8", "rom"],
+                            "Game Boy" => vec!["gb", "gbc", "rom"],
+                            _ => vec!["rom"],
+                        };
+                        
                         if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("ROM files", &["ch8", "rom"])
+                            .add_filter("ROM files", &extensions)
                             .pick_file()
                         {
                             match self.emulator.load_rom(&path) {
@@ -235,124 +338,292 @@ impl eframe::App for App {
 
                     // Compact registers in 4 columns with larger font
                     ui.heading("Registers");
-                    let metadata = self.emulator.metadata();
-                    egui::Grid::new("registers_grid")
-                        .num_columns(4)
-                        .spacing([8.0, 2.0])
-                        .show(ui, |ui| {
-                            for (i, reg) in metadata.registers.iter().enumerate() {
-                                ui.label(
-                                    egui::RichText::new(format!("V{:X}:{:02X}", i, reg))
-                                        .size(14.0)
-                                        .monospace(),
-                                );
-                                if (i + 1) % 4 == 0 {
+                    match &self.emulator {
+                        EmulatorType::Chip8(emu) => {
+                            let metadata = emu.metadata();
+                            egui::Grid::new("registers_grid")
+                                .num_columns(4)
+                                .spacing([8.0, 2.0])
+                                .show(ui, |ui| {
+                                    for (i, reg) in metadata.registers.iter().enumerate() {
+                                        ui.label(
+                                            egui::RichText::new(format!("V{:X}:{:02X}", i, reg))
+                                                .size(14.0)
+                                                .monospace(),
+                                        );
+                                        if (i + 1) % 4 == 0 {
+                                            ui.end_row();
+                                        }
+                                    }
+                                });
+
+                            ui.add_space(4.0);
+
+                            // System registers in 2 columns
+                            egui::Grid::new("sys_registers_grid")
+                                .num_columns(2)
+                                .spacing([8.0, 2.0])
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!("I:{:04X}", metadata.index_register))
+                                            .size(14.0)
+                                            .monospace(),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(format!("PC:{:04X}", metadata.program_counter))
+                                            .size(14.0)
+                                            .monospace(),
+                                    );
                                     ui.end_row();
-                                }
-                            }
-                        });
-
-                    ui.add_space(4.0);
-
-                    // System registers in 2 columns
-                    egui::Grid::new("sys_registers_grid")
-                        .num_columns(2)
-                        .spacing([8.0, 2.0])
-                        .show(ui, |ui| {
-                            ui.label(
-                                egui::RichText::new(format!("I:{:04X}", metadata.index_register))
-                                    .size(14.0)
-                                    .monospace(),
-                            );
-                            ui.label(
-                                egui::RichText::new(format!("PC:{:04X}", metadata.program_counter))
-                                    .size(14.0)
-                                    .monospace(),
-                            );
-                            ui.end_row();
-                            ui.label(
-                                egui::RichText::new(format!("SP:{}", metadata.stack_pointer))
-                                    .size(14.0)
-                                    .monospace(),
-                            );
-                            ui.label(
-                                egui::RichText::new(format!("OP:{:04X}", metadata.current_opcode))
-                                    .size(14.0)
-                                    .monospace(),
-                            );
-                            ui.end_row();
-                            ui.label(
-                                egui::RichText::new(format!("DT:{}", metadata.delay_timer))
-                                    .size(14.0)
-                                    .monospace(),
-                            );
-                            ui.label(
-                                egui::RichText::new(format!("ST:{}", metadata.sound_timer))
-                                    .size(14.0)
-                                    .monospace(),
-                            );
-                        });
+                                    ui.label(
+                                        egui::RichText::new(format!("SP:{}", metadata.stack_pointer))
+                                            .size(14.0)
+                                            .monospace(),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(format!("OP:{:04X}", metadata.current_opcode))
+                                            .size(14.0)
+                                            .monospace(),
+                                    );
+                                    ui.end_row();
+                                    ui.label(
+                                        egui::RichText::new(format!("DT:{}", metadata.delay_timer))
+                                            .size(14.0)
+                                            .monospace(),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(format!("ST:{}", metadata.sound_timer))
+                                            .size(14.0)
+                                            .monospace(),
+                                    );
+                                });
+                        }
+                        EmulatorType::GameBoy(emu) => {
+                            let metadata = emu.metadata();
+                            egui::Grid::new("registers_grid")
+                                .num_columns(2)
+                                .spacing([8.0, 2.0])
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!("A:{:02X}", metadata.registers[0]))
+                                            .size(14.0)
+                                            .monospace(),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(format!("F:{:02X}", metadata.registers[1]))
+                                            .size(14.0)
+                                            .monospace(),
+                                    );
+                                    ui.end_row();
+                                    ui.label(
+                                        egui::RichText::new(format!("B:{:02X}", metadata.registers[2]))
+                                            .size(14.0)
+                                            .monospace(),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(format!("C:{:02X}", metadata.registers[3]))
+                                            .size(14.0)
+                                            .monospace(),
+                                    );
+                                    ui.end_row();
+                                    ui.label(
+                                        egui::RichText::new(format!("D:{:02X}", metadata.registers[4]))
+                                            .size(14.0)
+                                            .monospace(),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(format!("E:{:02X}", metadata.registers[5]))
+                                            .size(14.0)
+                                            .monospace(),
+                                    );
+                                    ui.end_row();
+                                    ui.label(
+                                        egui::RichText::new(format!("H:{:02X}", metadata.registers[6]))
+                                            .size(14.0)
+                                            .monospace(),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(format!("L:{:02X}", metadata.registers[7]))
+                                            .size(14.0)
+                                            .monospace(),
+                                    );
+                                    ui.end_row();
+                                    ui.label(
+                                        egui::RichText::new(format!("SP:{:04X}", metadata.sp))
+                                            .size(14.0)
+                                            .monospace(),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(format!("PC:{:04X}", metadata.pc))
+                                            .size(14.0)
+                                            .monospace(),
+                                    );
+                                    ui.end_row();
+                                    ui.label(
+                                        egui::RichText::new(format!("OP:{:02X}", metadata.current_opcode))
+                                            .size(14.0)
+                                            .monospace(),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(format!("IME:{}", if metadata.ime { "1" } else { "0" }))
+                                            .size(14.0)
+                                            .monospace(),
+                                    );
+                                });
+                        }
+                    }
 
                     ui.separator();
                     ui.heading("Keys");
 
-                    // Compact keypad
-                    let keys = [
-                        [0x1, 0x2, 0x3, 0xC],
-                        [0x4, 0x5, 0x6, 0xD],
-                        [0x7, 0x8, 0x9, 0xE],
-                        [0xA, 0x0, 0xB, 0xF],
-                    ];
+                    // Display keys based on emulator type
+                    match &self.selected_emulator[..] {
+                        "CHIP-8" => {
+                            // Compact keypad
+                            let keys = [
+                                [0x1, 0x2, 0x3, 0xC],
+                                [0x4, 0x5, 0x6, 0xD],
+                                [0x7, 0x8, 0x9, 0xE],
+                                [0xA, 0x0, 0xB, 0xF],
+                            ];
 
-                    let button_size = ((ui.available_width() - 24.0) / 4.0).clamp(20.0, 35.0);
+                            let button_size = ((ui.available_width() - 24.0) / 4.0).clamp(20.0, 35.0);
 
-                    for row in keys {
-                        ui.horizontal(|ui| {
-                            for &k in &row {
-                                let pressed = inputs[k];
-                                let button = egui::Button::new(format!("{:X}", k))
-                                    .min_size(egui::vec2(button_size, button_size));
-                                if pressed {
-                                    ui.add_sized(
-                                        [button_size, button_size],
-                                        button.fill(egui::Color32::GREEN),
-                                    );
-                                } else {
-                                    ui.add_sized([button_size, button_size], button);
-                                }
-                            }
-                        });
-                    }
-
-                    // --- STACK SECTION ---
-                    ui.separator();
-                    ui.heading("Stack");
-
-                    let metadata = self.emulator.metadata();
-                    if metadata.stack_pointer == 0 {
-                        ui.label("Empty");
-                    } else {
-                        // Stack visualization as a vertical list for better readability
-                        ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
-
-                        for i in (0..metadata.stack_pointer).rev() {
-                            if (i as usize) < metadata.stack.len() {
-                                let color = if i == metadata.stack_pointer - 1 {
-                                    egui::Color32::YELLOW
-                                } else {
-                                    egui::Color32::WHITE
-                                };
+                            for row in keys {
                                 ui.horizontal(|ui| {
-                                    ui.colored_label(color, format!("[{}]", i));
-                                    ui.colored_label(
-                                        color,
-                                        format!("0x{:04X}", metadata.stack[i as usize]),
-                                    );
+                                    for &k in &row {
+                                        let pressed = inputs[k];
+                                        let button = egui::Button::new(format!("{:X}", k))
+                                            .min_size(egui::vec2(button_size, button_size));
+                                        if pressed {
+                                            ui.add_sized(
+                                                [button_size, button_size],
+                                                button.fill(egui::Color32::GREEN),
+                                            );
+                                        } else {
+                                            ui.add_sized([button_size, button_size], button);
+                                        }
+                                    }
                                 });
                             }
                         }
+                        "Game Boy" => {
+                            // Game Boy button layout
+                            ui.horizontal(|ui| {
+                                ui.vertical(|ui| {
+                                    ui.label("D-Pad:");
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(30.0);
+                                        let up_pressed = inputs[4];
+                                        let btn = egui::Button::new("↑").min_size(egui::vec2(25.0, 25.0));
+                                        if up_pressed {
+                                            ui.add(btn.fill(egui::Color32::GREEN));
+                                        } else {
+                                            ui.add(btn);
+                                        }
+                                    });
+                                    ui.horizontal(|ui| {
+                                        let left_pressed = inputs[6];
+                                        let btn = egui::Button::new("←").min_size(egui::vec2(25.0, 25.0));
+                                        if left_pressed {
+                                            ui.add(btn.fill(egui::Color32::GREEN));
+                                        } else {
+                                            ui.add(btn);
+                                        }
+                                        
+                                        let down_pressed = inputs[5];
+                                        let btn = egui::Button::new("↓").min_size(egui::vec2(25.0, 25.0));
+                                        if down_pressed {
+                                            ui.add(btn.fill(egui::Color32::GREEN));
+                                        } else {
+                                            ui.add(btn);
+                                        }
+                                        
+                                        let right_pressed = inputs[7];
+                                        let btn = egui::Button::new("→").min_size(egui::vec2(25.0, 25.0));
+                                        if right_pressed {
+                                            ui.add(btn.fill(egui::Color32::GREEN));
+                                        } else {
+                                            ui.add(btn);
+                                        }
+                                    });
+                                });
+                                
+                                ui.add_space(10.0);
+                                
+                                ui.vertical(|ui| {
+                                    ui.label("Buttons:");
+                                    ui.horizontal(|ui| {
+                                        let a_pressed = inputs[0];
+                                        let btn = egui::Button::new("A").min_size(egui::vec2(30.0, 30.0));
+                                        if a_pressed {
+                                            ui.add(btn.fill(egui::Color32::GREEN));
+                                        } else {
+                                            ui.add(btn);
+                                        }
+                                        
+                                        let b_pressed = inputs[1];
+                                        let btn = egui::Button::new("B").min_size(egui::vec2(30.0, 30.0));
+                                        if b_pressed {
+                                            ui.add(btn.fill(egui::Color32::GREEN));
+                                        } else {
+                                            ui.add(btn);
+                                        }
+                                    });
+                                    ui.horizontal(|ui| {
+                                        let select_pressed = inputs[3];
+                                        let btn = egui::Button::new("Select").min_size(egui::vec2(45.0, 20.0));
+                                        if select_pressed {
+                                            ui.add(btn.fill(egui::Color32::GREEN));
+                                        } else {
+                                            ui.add(btn);
+                                        }
+                                        
+                                        let start_pressed = inputs[2];
+                                        let btn = egui::Button::new("Start").min_size(egui::vec2(45.0, 20.0));
+                                        if start_pressed {
+                                            ui.add(btn.fill(egui::Color32::GREEN));
+                                        } else {
+                                            ui.add(btn);
+                                        }
+                                    });
+                                });
+                            });
+                        }
+                        _ => {}
+                    }
 
-                        ui.style_mut().override_text_style = None; // Reset text style
+                    // --- STACK SECTION (CHIP-8 only) ---
+                    if let EmulatorType::Chip8(emu) = &self.emulator {
+                        ui.separator();
+                        ui.heading("Stack");
+
+                        let metadata = emu.metadata();
+                        if metadata.stack_pointer == 0 {
+                            ui.label("Empty");
+                        } else {
+                            // Stack visualization as a vertical list for better readability
+                            ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
+
+                            for i in (0..metadata.stack_pointer).rev() {
+                                if (i as usize) < metadata.stack.len() {
+                                    let color = if i == metadata.stack_pointer - 1 {
+                                        egui::Color32::YELLOW
+                                    } else {
+                                        egui::Color32::WHITE
+                                    };
+                                    ui.horizontal(|ui| {
+                                        ui.colored_label(color, format!("[{}]", i));
+                                        ui.colored_label(
+                                            color,
+                                            format!("0x{:04X}", metadata.stack[i as usize]),
+                                        );
+                                    });
+                                }
+                            }
+
+                            ui.style_mut().override_text_style = None; // Reset text style
+                        }
                     }
                 });
             });
@@ -365,73 +636,143 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 ui.heading("Memory");
 
-                let metadata = self.emulator.metadata();
+                // Navigation controls based on emulator type
+                match &self.emulator {
+                    EmulatorType::Chip8(emu) => {
+                        let metadata = emu.metadata();
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.small_button("Program Counter").clicked() {
+                                self.memory_scroll_to = Some(metadata.program_counter as usize);
+                            }
+                            if ui.small_button("Index Register").clicked() {
+                                self.memory_scroll_to = Some(metadata.index_register as usize);
+                            }
+                            if ui.small_button("Program Start").clicked() {
+                                self.memory_scroll_to = Some(0x200); // CHIP-8 program start
+                            }
+                            if ui.small_button("Font Start").clicked() {
+                                self.memory_scroll_to = Some(0x50); // CHIP-8 font start
+                            }
+                        });
 
-                // Navigation controls
-                ui.horizontal_wrapped(|ui| {
-                    if ui.small_button("Program Counter").clicked() {
-                        self.memory_scroll_to = Some(metadata.program_counter as usize);
-                    }
-                    if ui.small_button("Index Register").clicked() {
-                        self.memory_scroll_to = Some(metadata.index_register as usize);
-                    }
-                    if ui.small_button("Program Start").clicked() {
-                        self.memory_scroll_to = Some(0x200); // CHIP-8 program start
-                    }
-                    if ui.small_button("Font Start").clicked() {
-                        self.memory_scroll_to = Some(0x50); // CHIP-8 font start
-                    }
-                });
+                        ui.separator();
 
-                ui.separator();
+                        let mut scroll_area = egui::ScrollArea::vertical()
+                            .id_salt("memory_scroll")
+                            .auto_shrink([false, false]);
 
-                let mut scroll_area = egui::ScrollArea::vertical()
-                    .id_salt("memory_scroll")
-                    .auto_shrink([false, false]);
+                        if let Some(scroll_to) = self.memory_scroll_to.take() {
+                            let row = scroll_to / 16;
+                            scroll_area = scroll_area.vertical_scroll_offset((row as f32) * 18.0);
+                        }
 
-                if let Some(scroll_to) = self.memory_scroll_to.take() {
-                    let row = scroll_to / 16;
-                    scroll_area = scroll_area.vertical_scroll_offset((row as f32) * 18.0);
-                }
+                        scroll_area.show(ui, |ui| {
+                            ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
 
-                scroll_area.show(ui, |ui| {
-                    ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
+                            for (addr, chunk) in metadata.memory.chunks(16).enumerate() {
+                                let base_addr = addr * 16;
 
-                    for (addr, chunk) in metadata.memory.chunks(16).enumerate() {
-                        let base_addr = addr * 16;
+                                ui.horizontal(|ui| {
+                                    // Address
+                                    let addr_color = if base_addr == metadata.program_counter as usize {
+                                        egui::Color32::YELLOW
+                                    } else if base_addr <= metadata.index_register as usize
+                                        && (metadata.index_register as usize) < base_addr + 16
+                                    {
+                                        egui::Color32::LIGHT_BLUE
+                                    } else {
+                                        egui::Color32::GRAY
+                                    };
 
-                        ui.horizontal(|ui| {
-                            // Address
-                            let addr_color = if base_addr == metadata.program_counter as usize {
-                                egui::Color32::YELLOW
-                            } else if base_addr <= metadata.index_register as usize
-                                && (metadata.index_register as usize) < base_addr + 16
-                            {
-                                egui::Color32::LIGHT_BLUE
-                            } else {
-                                egui::Color32::GRAY
-                            };
+                                    ui.colored_label(addr_color, format!("{:04X}:", base_addr));
 
-                            ui.colored_label(addr_color, format!("{:04X}:", base_addr));
+                                    // Hex bytes
+                                    for (i, &byte) in chunk.iter().enumerate() {
+                                        let byte_addr = base_addr + i;
+                                        let color = if byte_addr == metadata.program_counter as usize {
+                                            egui::Color32::YELLOW
+                                        } else if byte_addr == metadata.index_register as usize {
+                                            egui::Color32::LIGHT_BLUE
+                                        } else if byte != 0 {
+                                            egui::Color32::WHITE
+                                        } else {
+                                            egui::Color32::DARK_GRAY
+                                        };
 
-                            // Hex bytes
-                            for (i, &byte) in chunk.iter().enumerate() {
-                                let byte_addr = base_addr + i;
-                                let color = if byte_addr == metadata.program_counter as usize {
-                                    egui::Color32::YELLOW
-                                } else if byte_addr == metadata.index_register as usize {
-                                    egui::Color32::LIGHT_BLUE
-                                } else if byte != 0 {
-                                    egui::Color32::WHITE
-                                } else {
-                                    egui::Color32::DARK_GRAY
-                                };
-
-                                ui.colored_label(color, format!("{:02X}", byte));
+                                        ui.colored_label(color, format!("{:02X}", byte));
+                                    }
+                                });
                             }
                         });
                     }
-                });
+                    EmulatorType::GameBoy(emu) => {
+                        let metadata = emu.metadata();
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.small_button("Program Counter").clicked() {
+                                self.memory_scroll_to = Some(metadata.pc as usize);
+                            }
+                            if ui.small_button("Stack Pointer").clicked() {
+                                self.memory_scroll_to = Some(metadata.sp as usize);
+                            }
+                            if ui.small_button("ROM Start").clicked() {
+                                self.memory_scroll_to = Some(0x0000);
+                            }
+                            if ui.small_button("Entry Point").clicked() {
+                                self.memory_scroll_to = Some(0x0100);
+                            }
+                        });
+
+                        ui.separator();
+
+                        let mut scroll_area = egui::ScrollArea::vertical()
+                            .id_salt("memory_scroll")
+                            .auto_shrink([false, false]);
+
+                        if let Some(scroll_to) = self.memory_scroll_to.take() {
+                            let row = scroll_to / 16;
+                            scroll_area = scroll_area.vertical_scroll_offset((row as f32) * 18.0);
+                        }
+
+                        scroll_area.show(ui, |ui| {
+                            ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
+
+                            for (addr, chunk) in metadata.memory.chunks(16).enumerate() {
+                                let base_addr = addr * 16;
+
+                                ui.horizontal(|ui| {
+                                    // Address
+                                    let addr_color = if base_addr == metadata.pc as usize {
+                                        egui::Color32::YELLOW
+                                    } else if base_addr <= metadata.sp as usize
+                                        && (metadata.sp as usize) < base_addr + 16
+                                    {
+                                        egui::Color32::LIGHT_BLUE
+                                    } else {
+                                        egui::Color32::GRAY
+                                    };
+
+                                    ui.colored_label(addr_color, format!("{:04X}:", base_addr));
+
+                                    // Hex bytes
+                                    for (i, &byte) in chunk.iter().enumerate() {
+                                        let byte_addr = base_addr + i;
+                                        let color = if byte_addr == metadata.pc as usize {
+                                            egui::Color32::YELLOW
+                                        } else if byte_addr == metadata.sp as usize {
+                                            egui::Color32::LIGHT_BLUE
+                                        } else if byte != 0 {
+                                            egui::Color32::WHITE
+                                        } else {
+                                            egui::Color32::DARK_GRAY
+                                        };
+
+                                        ui.colored_label(color, format!("{:02X}", byte));
+                                    }
+                                });
+                            }
+                        });
+                    }
+                }
             });
 
         // --- BOTTOM PANEL: Instructions/Disassembly ---
@@ -444,48 +785,50 @@ impl eframe::App for App {
                     ui.heading("Instructions");
                 });
 
-                let metadata = self.emulator.metadata();
+                match &self.emulator {
+                    EmulatorType::Chip8(emu) => {
+                        let metadata = emu.metadata();
 
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
 
-                        // Show more instructions around PC for better context
-                        let pc = metadata.program_counter as usize;
-                        let start = pc.saturating_sub(20) & !1; // Align to even address
-                        let end = (pc + 40).min(metadata.memory.len() - 1) & !1;
+                                // Show more instructions around PC for better context
+                                let pc = metadata.program_counter as usize;
+                                let start = pc.saturating_sub(20) & !1; // Align to even address
+                                let end = (pc + 40).min(metadata.memory.len() - 1) & !1;
 
-                        for addr in (start..end).step_by(2) {
-                            if addr + 1 < metadata.memory.len() {
-                                let opcode = ((metadata.memory[addr] as u16) << 8)
-                                    | (metadata.memory[addr + 1] as u16);
+                                for addr in (start..end).step_by(2) {
+                                    if addr + 1 < metadata.memory.len() {
+                                        let opcode = ((metadata.memory[addr] as u16) << 8)
+                                            | (metadata.memory[addr + 1] as u16);
 
-                                ui.horizontal(|ui| {
-                                    let is_current = addr == pc;
-                                    let color = if is_current {
-                                        egui::Color32::YELLOW
-                                    } else {
-                                        egui::Color32::WHITE
-                                    };
+                                        ui.horizontal(|ui| {
+                                            let is_current = addr == pc;
+                                            let color = if is_current {
+                                                egui::Color32::YELLOW
+                                            } else {
+                                                egui::Color32::WHITE
+                                            };
 
-                                    // Add yellowish background highlight for current instxn
-                                    if is_current {
-                                        ui.painter().rect_filled(
-                                            ui.available_rect_before_wrap(),
-                                            0.0,
-                                            egui::Color32::from_rgba_unmultiplied(255, 255, 0, 30),
-                                        );
-                                    }
+                                            // Add yellowish background highlight for current instxn
+                                            if is_current {
+                                                ui.painter().rect_filled(
+                                                    ui.available_rect_before_wrap(),
+                                                    0.0,
+                                                    egui::Color32::from_rgba_unmultiplied(255, 255, 0, 30),
+                                                );
+                                            }
 
-                                    ui.colored_label(
-                                        color,
-                                        format!("{:04X}: {:04X}", addr, opcode),
-                                    );
+                                            ui.colored_label(
+                                                color,
+                                                format!("{:04X}: {:04X}", addr, opcode),
+                                            );
 
-                                    ui.separator();
+                                            ui.separator();
 
-                                    let instruction = match opcode & 0xF000 {
+                                            let instruction = match opcode & 0xF000 {
                                         0x0000 => match opcode {
                                             0x00E0 => format!("{:<20}; Clear display", "CLS"),
                                             0x00EE => {
@@ -746,6 +1089,112 @@ impl eframe::App for App {
                             }
                         }
                     });
+                    }
+                    EmulatorType::GameBoy(emu) => {
+                        let metadata = emu.metadata();
+
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
+
+                                // Show instructions around PC
+                                let pc = metadata.pc as usize;
+                                let start = pc.saturating_sub(20);
+                                let end = (pc + 40).min(metadata.memory.len());
+
+                                for addr in start..end {
+                                    if addr < metadata.memory.len() {
+                                        let opcode = metadata.memory[addr];
+
+                                        ui.horizontal(|ui| {
+                                            let is_current = addr == pc;
+                                            let color = if is_current {
+                                                egui::Color32::YELLOW
+                                            } else {
+                                                egui::Color32::WHITE
+                                            };
+
+                                            if is_current {
+                                                ui.painter().rect_filled(
+                                                    ui.available_rect_before_wrap(),
+                                                    0.0,
+                                                    egui::Color32::from_rgba_unmultiplied(255, 255, 0, 30),
+                                                );
+                                            }
+
+                                            ui.colored_label(
+                                                color,
+                                                format!("{:04X}: {:02X}", addr, opcode),
+                                            );
+
+                                            ui.separator();
+
+                                            // Basic Game Boy disassembly
+                                            let instruction = match opcode {
+                                                0x00 => "NOP".to_string(),
+                                                0x01 => "LD BC, d16".to_string(),
+                                                0x02 => "LD (BC), A".to_string(),
+                                                0x03 => "INC BC".to_string(),
+                                                0x04 => "INC B".to_string(),
+                                                0x05 => "DEC B".to_string(),
+                                                0x06 => "LD B, d8".to_string(),
+                                                0x0A => "LD A, (BC)".to_string(),
+                                                0x11 => "LD DE, d16".to_string(),
+                                                0x12 => "LD (DE), A".to_string(),
+                                                0x13 => "INC DE".to_string(),
+                                                0x1E => "LD E, d8".to_string(),
+                                                0x21 => "LD HL, d16".to_string(),
+                                                0x22 => "LD (HL+), A".to_string(),
+                                                0x23 => "INC HL".to_string(),
+                                                0x2E => "LD L, d8".to_string(),
+                                                0x31 => "LD SP, d16".to_string(),
+                                                0x32 => "LD (HL-), A".to_string(),
+                                                0x33 => "INC SP".to_string(),
+                                                0x3E => "LD A, d8".to_string(),
+                                                0x76 => "HALT".to_string(),
+                                                0xC3 => "JP a16".to_string(),
+                                                0xC9 => "RET".to_string(),
+                                                0xCD => "CALL a16".to_string(),
+                                                0xE0 => "LDH (a8), A".to_string(),
+                                                0xE2 => "LD (C), A".to_string(),
+                                                0xF0 => "LDH A, (a8)".to_string(),
+                                                0xF3 => "DI".to_string(),
+                                                0xFB => "EI".to_string(),
+                                                0xFE => "CP d8".to_string(),
+                                                0x40..=0x7F => {
+                                                    let to = (opcode >> 3) & 0x07;
+                                                    let from = opcode & 0x07;
+                                                    format!("LD {}, {}", 
+                                                        ["B", "C", "D", "E", "H", "L", "(HL)", "A"][to as usize],
+                                                        ["B", "C", "D", "E", "H", "L", "(HL)", "A"][from as usize])
+                                                }
+                                                0x80..=0x87 => {
+                                                    let reg = opcode & 0x07;
+                                                    format!("ADD A, {}", ["B", "C", "D", "E", "H", "L", "(HL)", "A"][reg as usize])
+                                                }
+                                                0x90..=0x97 => {
+                                                    let reg = opcode & 0x07;
+                                                    format!("SUB {}", ["B", "C", "D", "E", "H", "L", "(HL)", "A"][reg as usize])
+                                                }
+                                                0xA8..=0xAF => {
+                                                    let reg = opcode & 0x07;
+                                                    format!("XOR {}", ["B", "C", "D", "E", "H", "L", "(HL)", "A"][reg as usize])
+                                                }
+                                                0xB8..=0xBF => {
+                                                    let reg = opcode & 0x07;
+                                                    format!("CP {}", ["B", "C", "D", "E", "H", "L", "(HL)", "A"][reg as usize])
+                                                }
+                                                _ => format!("??? (0x{:02X})", opcode),
+                                            };
+
+                                            ui.colored_label(color, instruction);
+                                        });
+                                    }
+                                }
+                            });
+                    }
+                }
             });
 
         // --- CENTER PANEL: Chip-8 Display ---
