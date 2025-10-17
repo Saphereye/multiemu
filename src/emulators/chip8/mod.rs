@@ -1,7 +1,14 @@
-use crate::configs::{FONTSET_START_ADDRESS, HEIGHT, PROGRAM_START_ADDRESS, WIDTH};
-use crate::rand::Lcg;
+mod configs;
+mod rand;
+
+use super::{EmuError, Emulator};
+use configs::{FONTSET_START_ADDRESS, HEIGHT, PROGRAM_START_ADDRESS, WIDTH};
+use rand::Lcg;
 use raplay::{source::Sine, Sink};
-use thiserror::Error;
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
+use std::time::Duration;
 
 /// The CHIP-8 font set.
 const FONT_SET: [u8; 80] = [
@@ -23,61 +30,52 @@ const FONT_SET: [u8; 80] = [
     0xF0, 0x80, 0xF0, 0x80, 0x80, // F
 ];
 
-#[derive(Debug, Error)]
-pub enum CpuError {
-    #[error("Unrecognized opcode {opcode:#06X} at PC={pc:#06X}")]
-    UnrecognizedOpcode { opcode: u16, pc: u16 },
-
-    #[error("Invalid usage of opcode {opcode:#06X} at PC={pc:#06X} (hint: {hint}.)")]
-    InvalidUsageOfOpcode {
-        opcode: u16,
-        pc: u16,
-        hint: &'static str,
-    },
-
-    #[error("Invalid stack access SP={sp:#04X} at PC={pc:#06X}")]
-    InvalidStackAccess { sp: u8, pc: u16 },
-
-    #[error("Invalid indexing: Vx={vx:#04X}, at PC={pc:#06X}")]
-    InvalidIndexing { vx: u8, pc: u16 },
-}
-
-/// Implementation of the Chip-8 CPU
-pub struct Cpu {
+/// CHIP-8 specific metadata
+#[derive(Debug, Clone)]
+pub struct Chip8Metadata {
     pub registers: [u8; 16],
-    pub memory: [u8; 4096],
     pub index_register: u16,
     pub program_counter: u16,
-    pub stack: [u16; 16], // 16 levels of stack
+    pub stack: [u16; 16],
     pub stack_pointer: u8,
     pub delay_timer: u8,
     pub sound_timer: u8,
-    pub input_keys: [bool; 16],         // true if nth key is pressed
-    pub buffer: [bool; WIDTH * HEIGHT], // true if pixel is on
     pub current_opcode: u16,
+    pub memory: [u8; 4096],
+}
 
-    // These fields aren't cpu specific,
-    // but I am using them as helper fields
-    pub lcg: Lcg,
-    pub audio: Sink,
-    pub is_mute: bool,
+/// Implementation of the CHIP-8 emulator
+pub struct Chip8Emulator {
+    registers: [u8; 16],
+    memory: [u8; 4096],
+    index_register: u16,
+    program_counter: u16,
+    stack: [u16; 16],
+    stack_pointer: u8,
+    delay_timer: u8,
+    sound_timer: u8,
+    input_keys: [bool; 16],
+    buffer: [bool; WIDTH * HEIGHT],
+    framebuffer: [u32; WIDTH * HEIGHT],
+    current_opcode: u16,
+    lcg: Lcg,
+    audio: Sink,
+    is_mute: bool,
     is_key_pressed: bool,
 }
 
-impl Cpu {
-    /// Initialize the CPU with default values.
-    ///
-    /// The program counter is set to 0x200, the start address of the program.
-    /// All registers are set to 0 and the monochrome display is cleared.
+impl Chip8Emulator {
     pub fn new() -> Self {
         let mut memory = [0; 4096];
         memory[FONTSET_START_ADDRESS as usize
             ..(FONTSET_START_ADDRESS + FONT_SET.len() as u16) as usize]
             .copy_from_slice(&FONT_SET);
 
+        // Try to initialize audio, but don't fail if it's not available
         let mut sink = Sink::default();
         let src = Sine::new(440.0);
-        sink.load(Box::new(src), false).unwrap();
+        let _ = sink.load(Box::new(src), false); // Ignore errors
+
         Self {
             registers: [0; 16],
             memory,
@@ -89,12 +87,8 @@ impl Cpu {
             sound_timer: 0,
             input_keys: [false; 16],
             current_opcode: 0,
-            buffer: [false; 64 * 32],
-            // For the first 200 values of this LCG:
-            // Arithmetic mean: 129.02 Expected value: 128.00
-            // Monte Carlo PI Test: 3.120, where PI should be 3.142
-            // Serial Coefficient: 0.090
-            // Entropy: 7.366bits, where 8 bits is optimal
+            buffer: [false; WIDTH * HEIGHT],
+            framebuffer: [0; WIDTH * HEIGHT],
             lcg: Lcg::new(75, 1, 31),
             audio: sink,
             is_mute: false,
@@ -102,19 +96,28 @@ impl Cpu {
         }
     }
 
-    /// Parses the opcode and executes the instruction.
-    /// On error, the execution of the incorrect opcode is halted
-    /// and an error is sent to callee.
-    ///
-    /// In case of error the callee has to deal with updating the PC.
-    fn parse_opcode(&mut self, opcode: u16) -> Result<(), CpuError> {
+    pub fn set_mute(&mut self, mute: bool) {
+        self.is_mute = mute;
+    }
+
+    fn update_framebuffer(&mut self) {
+        for (i, &pixel) in self.buffer.iter().enumerate() {
+            self.framebuffer[i] = if pixel {
+                0xFFFFFFFF // white ARGB
+            } else {
+                0xFF000000 // black ARGB
+            };
+        }
+    }
+
+    fn parse_opcode(&mut self, opcode: u16) -> Result<(), EmuError> {
         log::debug!("Parsing opcode: {:#06X}", opcode);
         let x = ((opcode & 0x0F00) >> 8) as usize;
         let y = ((opcode & 0x00F0) >> 4) as usize;
         match opcode {
             0x00E0 => {
                 // CLS, clear display
-                self.buffer = [false; 64 * 32];
+                self.buffer = [false; WIDTH * HEIGHT];
             }
             0x00EE => {
                 // RET, return from subroutine
@@ -124,9 +127,9 @@ impl Cpu {
                     self.stack_pointer = self.stack_pointer.wrapping_sub(1);
                     self.program_counter = self.stack[self.stack_pointer as usize];
                 } else {
-                    return Err(CpuError::InvalidStackAccess {
-                        sp: subtracted_stack_pointer,
-                        pc: self.program_counter,
+                    return Err(EmuError::InvalidStackAccess {
+                        sp: subtracted_stack_pointer as u64,
+                        pc: self.program_counter as u64,
                     });
                 }
             }
@@ -141,9 +144,9 @@ impl Cpu {
                     self.stack_pointer += 1;
                     self.program_counter = opcode & 0x0FFF;
                 } else {
-                    return Err(CpuError::InvalidStackAccess {
-                        sp: self.stack_pointer,
-                        pc: self.program_counter,
+                    return Err(EmuError::InvalidStackAccess {
+                        sp: self.stack_pointer as u64,
+                        pc: self.program_counter as u64,
                     });
                 }
             }
@@ -166,10 +169,10 @@ impl Cpu {
 
                 // Check if last nibble is 0
                 if opcode & 0x1 != 0 {
-                    return Err(CpuError::InvalidUsageOfOpcode {
-                        opcode,
-                        pc: self.program_counter,
-                        hint: "Set last nibble to 0",
+                    return Err(EmuError::InvalidOpcodeUsage {
+                        opcode: opcode as u64,
+                        pc: self.program_counter as u64,
+                        hint: " (Set last nibble to 0)",
                     });
                 } else if self.registers[x] == self.registers[y] {
                     self.program_counter = self.program_counter.wrapping_add(2);
@@ -240,10 +243,10 @@ impl Cpu {
                         self.registers[0xF] = carry;
                     }
                     _ => {
-                        return Err(CpuError::InvalidUsageOfOpcode {
-                            opcode,
-                            pc: self.program_counter,
-                            hint: "Set last nibble to 0, 1, 2, 3, 4, 5, 6, 7 or E",
+                        return Err(EmuError::InvalidOpcodeUsage {
+                            opcode: opcode as u64,
+                            pc: self.program_counter as u64,
+                            hint: " (Set last nibble to 0, 1, 2, 3, 4, 5, 6, 7 or E)",
                         });
                     }
                 }
@@ -253,10 +256,10 @@ impl Cpu {
 
                 // Check if last nibble is 0
                 if opcode & 0x1 != 0 {
-                    return Err(CpuError::InvalidUsageOfOpcode {
-                        opcode,
-                        pc: self.program_counter,
-                        hint: "Set last nibble to 0",
+                    return Err(EmuError::InvalidOpcodeUsage {
+                        opcode: opcode as u64,
+                        pc: self.program_counter as u64,
+                        hint: " (Set last nibble to 0)",
                     });
                 } else if self.registers[x] != self.registers[y] {
                     self.program_counter = self.program_counter.wrapping_add(2);
@@ -290,9 +293,9 @@ impl Cpu {
                     let sprite_byte = if index < self.memory.len() {
                         self.memory[index]
                     } else {
-                        return Err(CpuError::InvalidIndexing {
-                            vx: self.registers[x],
-                            pc: self.program_counter,
+                        return Err(EmuError::InvalidRegisterIndex {
+                            index,
+                            pc: self.program_counter as u64,
                         });
                     };
 
@@ -338,10 +341,10 @@ impl Cpu {
                         }
                     }
                     _ => {
-                        return Err(CpuError::InvalidUsageOfOpcode {
-                            opcode,
-                            pc: self.program_counter,
-                            hint: "For Ex prefix, only 9E and A1 suffix are supported",
+                        return Err(EmuError::InvalidOpcodeUsage {
+                            opcode: opcode as u64,
+                            pc: self.program_counter as u64,
+                            hint: " (For Ex prefix, only 9E and A1 suffix are supported)",
                         });
                     }
                 }
@@ -400,7 +403,6 @@ impl Cpu {
                     }
                     0x33 => {
                         // LD B, Vx, Store BCD representation of Vx in memory locations I, I+1, and I+2.
-                        // The interpreter takes the decimal value of Vx, and places the hundreds digit in memory at location in I, the tens digit at location I+1, and the ones digit at location I+2.
                         let mut value = self.registers[x];
 
                         self.memory[self.index_register as usize + 2] = value % 10; // Ones
@@ -429,48 +431,134 @@ impl Cpu {
                         self.index_register += 1 + x as u16;
                     }
                     _ => {
-                        return Err(CpuError::InvalidUsageOfOpcode {
-                            opcode,
-                            pc: self.program_counter,
-                            hint: "For Fx prefix, only 07, 0A, 15, 18, 1E, 29, 33, 55 and 65 suffix are supported",
+                        return Err(EmuError::InvalidOpcodeUsage {
+                            opcode: opcode as u64,
+                            pc: self.program_counter as u64,
+                            hint: " (For Fx prefix, only 07, 0A, 15, 18, 1E, 29, 33, 55 and 65 suffix are supported)",
                         });
                     }
                 }
             }
             _ => {
-                return Err(CpuError::UnrecognizedOpcode {
-                    opcode,
-                    pc: self.program_counter,
+                return Err(EmuError::UnrecognizedOpcode {
+                    opcode: opcode as u64,
+                    pc: self.program_counter as u64,
                 });
             }
         }
 
         Ok(())
     }
+}
 
-    /// Simulates one execution cycle of the cpu.
-    pub fn execute_instruction(&mut self) -> Result<(), CpuError> {
-        self.current_opcode = (self.memory[self.program_counter as usize] as u16) << 8
-            | self.memory[self.program_counter as usize + 1] as u16;
-        self.program_counter = self.program_counter.wrapping_add(2);
-        self.parse_opcode(self.current_opcode)?;
+impl Emulator for Chip8Emulator {
+    type Metadata = Chip8Metadata;
+
+    fn system_name(&self) -> &'static str {
+        "CHIP-8"
+    }
+
+    fn load_rom(&mut self, path: &Path) -> Result<(), EmuError> {
+        let mut file = File::open(path).map_err(|e| EmuError::RomIoError {
+            rom: path.to_path_buf(),
+            source: e,
+        })?;
+
+        let rom_space = &mut self.memory[PROGRAM_START_ADDRESS as usize..];
+        let n = file.read(rom_space).map_err(|e| EmuError::RomIoError {
+            rom: path.to_path_buf(),
+            source: e,
+        })?;
+
+        if n > rom_space.len() {
+            return Err(EmuError::InvalidRom {
+                rom: path.to_path_buf(),
+                message: "ROM file is too large",
+            });
+        }
 
         Ok(())
     }
 
-    /// If delay_timer or sound_timer are greater than 0, they are decremented by 1.
-    pub fn update_timers(&mut self) {
+    fn reset(&mut self) {
+        self.program_counter = PROGRAM_START_ADDRESS;
+        self.index_register = 0;
+        self.stack_pointer = 0;
+        self.delay_timer = 0;
+        self.sound_timer = 0;
+        self.registers = [0; 16];
+        self.buffer = [false; WIDTH * HEIGHT];
+        self.framebuffer = [0; WIDTH * HEIGHT];
+    }
+
+    fn step(&mut self) -> Result<(), EmuError> {
+        self.current_opcode = (self.memory[self.program_counter as usize] as u16) << 8
+            | self.memory[self.program_counter as usize + 1] as u16;
+        self.program_counter = self.program_counter.wrapping_add(2);
+        self.parse_opcode(self.current_opcode)?;
+        self.update_framebuffer();
+        Ok(())
+    }
+
+    fn update_timers(&mut self, _delta: Duration) {
         if self.delay_timer > 0 {
             self.delay_timer -= 1;
         }
 
         if self.sound_timer > 0 {
             if !self.is_mute {
-                self.audio.play(true).unwrap();
+                let _ = self.audio.play(true); // Ignore errors
             }
             self.sound_timer -= 1;
         } else if !self.is_mute {
-            self.audio.pause().unwrap();
+            let _ = self.audio.pause(); // Ignore errors
+        }
+    }
+
+    fn framebuffer(&self) -> &[u32] {
+        &self.framebuffer
+    }
+
+    fn resolution(&self) -> (usize, usize) {
+        (WIDTH, HEIGHT)
+    }
+
+    fn set_input_state(&mut self, inputs: &[bool]) {
+        self.input_keys.copy_from_slice(&inputs[0..16.min(inputs.len())]);
+    }
+
+    fn keymap(&self) -> Vec<(usize, String)> {
+        vec![
+            (0x0, "X".to_string()),
+            (0x1, "1".to_string()),
+            (0x2, "2".to_string()),
+            (0x3, "3".to_string()),
+            (0x4, "Q".to_string()),
+            (0x5, "W".to_string()),
+            (0x6, "E".to_string()),
+            (0x7, "A".to_string()),
+            (0x8, "S".to_string()),
+            (0x9, "D".to_string()),
+            (0xA, "Z".to_string()),
+            (0xB, "C".to_string()),
+            (0xC, "4".to_string()),
+            (0xD, "R".to_string()),
+            (0xE, "F".to_string()),
+            (0xF, "V".to_string()),
+        ]
+    }
+
+    fn metadata(&self) -> Self::Metadata {
+        Chip8Metadata {
+            registers: self.registers,
+            index_register: self.index_register,
+            program_counter: self.program_counter,
+            stack: self.stack,
+            stack_pointer: self.stack_pointer,
+            delay_timer: self.delay_timer,
+            sound_timer: self.sound_timer,
+            current_opcode: self.current_opcode,
+            memory: self.memory,
         }
     }
 }
