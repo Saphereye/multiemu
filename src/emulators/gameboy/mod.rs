@@ -1593,14 +1593,17 @@ impl Emulator for GameBoyEmulator {
             source: e,
         })?;
 
-        if rom_data.len() > 0x8000 {
-            return Err(EmuError::InvalidRom {
-                rom: path.to_path_buf(),
-                message: "ROM file is too large (max 32KB for now)",
-            });
+        // Support larger ROMs (up to 2MB) by only loading first 32KB into fixed ROM bank
+        // Full MBC support would require bank switching logic
+        let bytes_to_load = rom_data.len().min(0x8000);
+        
+        if rom_data.len() > 0x200000 {
+            log::warn!("ROM is larger than 2MB - only first 32KB will be loaded");
+        } else if rom_data.len() > 0x8000 {
+            log::warn!("ROM is {} KB - only first 32KB loaded. Full MBC support needed for bank switching.", rom_data.len() / 1024);
         }
 
-        self.memory[0..rom_data.len()].copy_from_slice(&rom_data);
+        self.memory[0..bytes_to_load].copy_from_slice(&rom_data[0..bytes_to_load]);
         self.rom_loaded = true;
         
         log::info!("Loaded Game Boy ROM: {} bytes", rom_data.len());

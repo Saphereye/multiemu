@@ -1169,7 +1169,7 @@ impl eframe::App for App {
 
                                             ui.separator();
 
-                                            // Basic Game Boy disassembly
+                                            // Comprehensive Game Boy disassembly
                                             let instruction = match opcode {
                                                 0x00 => "NOP".to_string(),
                                                 0x01 => "LD BC, d16".to_string(),
@@ -1178,30 +1178,118 @@ impl eframe::App for App {
                                                 0x04 => "INC B".to_string(),
                                                 0x05 => "DEC B".to_string(),
                                                 0x06 => "LD B, d8".to_string(),
+                                                0x07 => "RLCA".to_string(),
+                                                0x08 => "LD (a16), SP".to_string(),
+                                                0x09 => "ADD HL, BC".to_string(),
                                                 0x0A => "LD A, (BC)".to_string(),
+                                                0x0B => "DEC BC".to_string(),
+                                                0x0C => "INC C".to_string(),
+                                                0x0D => "DEC C".to_string(),
+                                                0x0E => "LD C, d8".to_string(),
+                                                0x0F => "RRCA".to_string(),
+                                                0x10 => "STOP".to_string(),
                                                 0x11 => "LD DE, d16".to_string(),
                                                 0x12 => "LD (DE), A".to_string(),
                                                 0x13 => "INC DE".to_string(),
+                                                0x14 => "INC D".to_string(),
+                                                0x15 => "DEC D".to_string(),
+                                                0x16 => "LD D, d8".to_string(),
+                                                0x17 => "RLA".to_string(),
+                                                0x18 => "JR r8".to_string(),
+                                                0x19 => "ADD HL, DE".to_string(),
+                                                0x1A => "LD A, (DE)".to_string(),
+                                                0x1B => "DEC DE".to_string(),
+                                                0x1C => "INC E".to_string(),
+                                                0x1D => "DEC E".to_string(),
                                                 0x1E => "LD E, d8".to_string(),
+                                                0x1F => "RRA".to_string(),
+                                                0x20 => "JR NZ, r8".to_string(),
                                                 0x21 => "LD HL, d16".to_string(),
                                                 0x22 => "LD (HL+), A".to_string(),
                                                 0x23 => "INC HL".to_string(),
+                                                0x24 => "INC H".to_string(),
+                                                0x25 => "DEC H".to_string(),
+                                                0x26 => "LD H, d8".to_string(),
+                                                0x27 => "DAA".to_string(),
+                                                0x28 => "JR Z, r8".to_string(),
+                                                0x29 => "ADD HL, HL".to_string(),
+                                                0x2A => "LD A, (HL+)".to_string(),
+                                                0x2B => "DEC HL".to_string(),
+                                                0x2C => "INC L".to_string(),
+                                                0x2D => "DEC L".to_string(),
                                                 0x2E => "LD L, d8".to_string(),
+                                                0x2F => "CPL".to_string(),
+                                                0x30 => "JR NC, r8".to_string(),
                                                 0x31 => "LD SP, d16".to_string(),
                                                 0x32 => "LD (HL-), A".to_string(),
                                                 0x33 => "INC SP".to_string(),
+                                                0x34 => "INC (HL)".to_string(),
+                                                0x35 => "DEC (HL)".to_string(),
+                                                0x36 => "LD (HL), d8".to_string(),
+                                                0x37 => "SCF".to_string(),
+                                                0x38 => "JR C, r8".to_string(),
+                                                0x39 => "ADD HL, SP".to_string(),
+                                                0x3A => "LD A, (HL-)".to_string(),
+                                                0x3B => "DEC SP".to_string(),
+                                                0x3C => "INC A".to_string(),
+                                                0x3D => "DEC A".to_string(),
                                                 0x3E => "LD A, d8".to_string(),
+                                                0x3F => "CCF".to_string(),
                                                 0x76 => "HALT".to_string(),
+                                                0xC0 => "RET NZ".to_string(),
+                                                0xC1 => "POP BC".to_string(),
+                                                0xC2 => "JP NZ, a16".to_string(),
                                                 0xC3 => "JP a16".to_string(),
+                                                0xC4 => "CALL NZ, a16".to_string(),
+                                                0xC5 => "PUSH BC".to_string(),
+                                                0xC6 => "ADD A, d8".to_string(),
+                                                0xC7 => "RST 00H".to_string(),
+                                                0xC8 => "RET Z".to_string(),
                                                 0xC9 => "RET".to_string(),
+                                                0xCA => "JP Z, a16".to_string(),
+                                                0xCB => "PREFIX CB".to_string(),
+                                                0xCC => "CALL Z, a16".to_string(),
                                                 0xCD => "CALL a16".to_string(),
+                                                0xCE => "ADC A, d8".to_string(),
+                                                0xCF => "RST 08H".to_string(),
+                                                0xD0 => "RET NC".to_string(),
+                                                0xD1 => "POP DE".to_string(),
+                                                0xD2 => "JP NC, a16".to_string(),
+                                                0xD4 => "CALL NC, a16".to_string(),
+                                                0xD5 => "PUSH DE".to_string(),
+                                                0xD6 => "SUB d8".to_string(),
+                                                0xD7 => "RST 10H".to_string(),
+                                                0xD8 => "RET C".to_string(),
+                                                0xD9 => "RETI".to_string(),
+                                                0xDA => "JP C, a16".to_string(),
+                                                0xDC => "CALL C, a16".to_string(),
+                                                0xDE => "SBC A, d8".to_string(),
+                                                0xDF => "RST 18H".to_string(),
                                                 0xE0 => "LDH (a8), A".to_string(),
+                                                0xE1 => "POP HL".to_string(),
                                                 0xE2 => "LD (C), A".to_string(),
+                                                0xE5 => "PUSH HL".to_string(),
+                                                0xE6 => "AND d8".to_string(),
+                                                0xE7 => "RST 20H".to_string(),
+                                                0xE8 => "ADD SP, r8".to_string(),
+                                                0xE9 => "JP (HL)".to_string(),
+                                                0xEA => "LD (a16), A".to_string(),
+                                                0xEE => "XOR d8".to_string(),
+                                                0xEF => "RST 28H".to_string(),
                                                 0xF0 => "LDH A, (a8)".to_string(),
+                                                0xF1 => "POP AF".to_string(),
+                                                0xF2 => "LD A, (C)".to_string(),
                                                 0xF3 => "DI".to_string(),
+                                                0xF5 => "PUSH AF".to_string(),
+                                                0xF6 => "OR d8".to_string(),
+                                                0xF7 => "RST 30H".to_string(),
+                                                0xF8 => "LD HL, SP+r8".to_string(),
+                                                0xF9 => "LD SP, HL".to_string(),
+                                                0xFA => "LD A, (a16)".to_string(),
                                                 0xFB => "EI".to_string(),
                                                 0xFE => "CP d8".to_string(),
-                                                0x40..=0x7F => {
+                                                0xFF => "RST 38H".to_string(),
+                                                0x40..=0x75 | 0x77..=0x7F => {
                                                     let to = (opcode >> 3) & 0x07;
                                                     let from = opcode & 0x07;
                                                     format!("LD {}, {}", 
@@ -1212,13 +1300,29 @@ impl eframe::App for App {
                                                     let reg = opcode & 0x07;
                                                     format!("ADD A, {}", ["B", "C", "D", "E", "H", "L", "(HL)", "A"][reg as usize])
                                                 }
+                                                0x88..=0x8F => {
+                                                    let reg = opcode & 0x07;
+                                                    format!("ADC A, {}", ["B", "C", "D", "E", "H", "L", "(HL)", "A"][reg as usize])
+                                                }
                                                 0x90..=0x97 => {
                                                     let reg = opcode & 0x07;
                                                     format!("SUB {}", ["B", "C", "D", "E", "H", "L", "(HL)", "A"][reg as usize])
                                                 }
+                                                0x98..=0x9F => {
+                                                    let reg = opcode & 0x07;
+                                                    format!("SBC A, {}", ["B", "C", "D", "E", "H", "L", "(HL)", "A"][reg as usize])
+                                                }
+                                                0xA0..=0xA7 => {
+                                                    let reg = opcode & 0x07;
+                                                    format!("AND {}", ["B", "C", "D", "E", "H", "L", "(HL)", "A"][reg as usize])
+                                                }
                                                 0xA8..=0xAF => {
                                                     let reg = opcode & 0x07;
                                                     format!("XOR {}", ["B", "C", "D", "E", "H", "L", "(HL)", "A"][reg as usize])
+                                                }
+                                                0xB0..=0xB7 => {
+                                                    let reg = opcode & 0x07;
+                                                    format!("OR {}", ["B", "C", "D", "E", "H", "L", "(HL)", "A"][reg as usize])
                                                 }
                                                 0xB8..=0xBF => {
                                                     let reg = opcode & 0x07;
