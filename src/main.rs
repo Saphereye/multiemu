@@ -8,7 +8,7 @@ mod configs;
 mod emulators;
 mod rand;
 
-use configs::{FONTSET_START_ADDRESS, HEIGHT, PROGRAM_START_ADDRESS, WIDTH};
+use configs::{FONTSET_START_ADDRESS, PROGRAM_START_ADDRESS};
 use emulators::chip8::{Chip8Emulator, Chip8Metadata};
 use emulators::Emulator;
 
@@ -742,10 +742,8 @@ impl eframe::App for App {
                 // Center the display
                 let center_pos = available_rect.center() - display_size / 2.0;
 
-                // TODO: move to newer egui function
-                ui.allocate_ui_at_rect(egui::Rect::from_min_size(center_pos, display_size), |ui| {
-                    ui.image((tex.id(), display_size));
-                });
+                let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(center_pos, display_size)));
+                child_ui.image((tex.id(), display_size));
             } else {
                 ui.centered_and_justified(|ui| {
                     ui.label("Loading display...");

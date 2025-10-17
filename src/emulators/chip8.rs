@@ -2,7 +2,6 @@ use super::{EmuError, Emulator};
 use crate::configs::{FONTSET_START_ADDRESS, HEIGHT, PROGRAM_START_ADDRESS, WIDTH};
 use crate::rand::Lcg;
 use raplay::{source::Sine, Sink};
-use std::any::Any;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
