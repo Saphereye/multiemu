@@ -17,9 +17,21 @@ cargo run --release
 ```
 
 The application will open with a GUI where you can:
-1. Select an emulator from the dropdown
+1. Select an emulator from the dropdown (CHIP-8 or Game Boy)
 2. Load a ROM file using the file picker
-3. Use the controls to run/pause/reset the emulator
+3. Click the Play button (▶) or press Space to start emulation
+4. Use the controls to pause/resume/reset the emulator
+
+### Quick Start with Test ROMs
+
+For Game Boy testing, a simple test ROM is provided:
+
+```bash
+# The test ROM is located in test_roms/simple_test.gb
+# Load it in the UI after selecting "Game Boy" from the dropdown
+```
+
+This test ROM fills VRAM with a pattern and loops continuously - perfect for verifying the emulator works.
 
 ### Command-line Options
 
@@ -99,4 +111,42 @@ All instructions use accurate M-cycle counts as documented in the Pan Docs:
 - [Pan Docs - Game Boy Technical Reference](https://gekkio.fi/files/gb-docs/gbctr.pdf) - Complete hardware specification including CPU instruction set and cycle timings
 - [Game Boy CPU Manual](http://marc.rawer.de/Gameboy/Docs/GBCPUman.pdf) - Detailed CPU instruction reference
 - [Game Boy Development Resources](https://gbdev.io/) - Community resources and development tools
+- [Game Boy Homebrew Hub](https://gbhh.avivace.com/) - Free homebrew ROMs for testing
+- [Blargg's Test ROMs](https://github.com/retrio/gb-test-roms) - Comprehensive CPU test suite
+
+### Controls
+
+**CHIP-8:**
+- Keys 1-4, Q-R, A-F, Z-C, V map to the 16-key hex keypad
+
+**Game Boy:**
+- Arrow Keys: D-pad (Up, Down, Left, Right)
+- X: A button
+- Z: B button  
+- Enter: Start
+- Shift: Select
+
+**Common:**
+- Space: Play/Pause emulation
+- R: Reset emulation
+- Speed slider: Adjust emulation speed (CHIP-8: 1-1000 cycles, Game Boy: 0.1x-10x)
+
+## Troubleshooting
+
+### Game Boy emulator stuck on green/yellow screen
+
+If the Game Boy emulator appears frozen:
+
+1. **Make sure you pressed Play** - The emulator starts paused after loading a ROM
+2. **Try the test ROM** - Use `test_roms/simple_test.gb` to verify basic functionality
+3. **Check console logs** - Look for ROM loading messages and any error output
+4. **Verify ROM compatibility** - Currently supports ROMs up to 32KB without Memory Bank Controllers
+5. **Some games may hit HALT** - If a game uses HALT without proper interrupt handling, it may appear stuck. Press any button to wake from HALT.
+
+### Where to get ROMs
+
+- **Test ROM included**: `test_roms/simple_test.gb` - Minimal ROM for testing
+- **CHIP-8 ROMs**: Available at https://github.com/dmatlack/chip8/tree/master/roms/games
+- **Game Boy Homebrew**: Free games at https://gbhh.avivace.com/
+- **Commercial ROMs**: Only use if you own the original cartridge
 
