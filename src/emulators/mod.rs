@@ -4,6 +4,7 @@ use std::time::Duration;
 use thiserror::Error;
 
 pub mod chip8;
+pub mod gameboy;
 
 #[derive(Debug, Error)]
 pub enum EmuError {
@@ -79,6 +80,9 @@ pub trait Emulator {
 
     /// Input handling
     fn set_input_state(&mut self, inputs: &[bool]);
+
+    /// Get the keymap for this emulator (index -> egui::Key)
+    fn keymap(&self) -> Vec<(usize, String)>;
 
     /// Access typed metadata - returns a copy/clone
     fn metadata(&self) -> Self::Metadata;

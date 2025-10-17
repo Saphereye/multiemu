@@ -1,44 +1,17 @@
 use clap::Parser;
 use eframe::egui;
-use egui::Key;
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-mod configs;
 mod emulators;
-mod rand;
 
-use configs::{FONTSET_START_ADDRESS, PROGRAM_START_ADDRESS};
 use emulators::chip8::{Chip8Emulator, Chip8Metadata};
 use emulators::Emulator;
-
-const KEY_MAP: [(usize, Key); 16] = [
-    (0x0, Key::X),
-    (0x1, Key::Num1),
-    (0x2, Key::Num2),
-    (0x3, Key::Num3),
-    (0x4, Key::Q),
-    (0x5, Key::W),
-    (0x6, Key::E),
-    (0x7, Key::A),
-    (0x8, Key::S),
-    (0x9, Key::D),
-    (0xA, Key::Z),
-    (0xB, Key::C),
-    (0xC, Key::Num4),
-    (0xD, Key::R),
-    (0xE, Key::F),
-    (0xF, Key::V),
-];
 
 
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    /// ROM file path
-    file: PathBuf,
-
     /// Number of CPU instructions per timer update (timer is at 60Hz)
     #[arg(short, long, default_value_t = 1)]
     cycles: u64,
@@ -57,19 +30,24 @@ pub struct App {
     memory_scroll_to: Option<usize>,
     is_paused: bool,
     selected_emulator: String,
+    rom_path: Option<std::path::PathBuf>,
 }
 
 impl App {
-    fn new(emulator: Box<dyn Emulator<Metadata = Chip8Metadata>>, cycles: u64) -> Self {
+    fn new(cycles: u64, mute: bool) -> Self {
+        let mut emulator = Chip8Emulator::new();
+        emulator.set_mute(mute);
+        
         Self {
-            emulator,
+            emulator: Box::new(emulator),
             cycles,
             texture: None,
             last_timer_update: Instant::now(),
             timer_period: Duration::from_nanos(16_666_667), // ~60Hz
             memory_scroll_to: None,
-            is_paused: false,
+            is_paused: true,
             selected_emulator: "CHIP-8".to_string(),
+            rom_path: None,
         }
     }
 
@@ -115,9 +93,29 @@ impl eframe::App for App {
 
         // --- Keyboard input ---
         let mut inputs = [false; 16];
+        let keymap = self.emulator.keymap();
         ctx.input(|i| {
-            for (chip8_key, egui_key) in KEY_MAP {
-                inputs[chip8_key] = i.key_down(egui_key);
+            for (chip8_key, key_str) in &keymap {
+                let key = match key_str.as_str() {
+                    "X" => egui::Key::X,
+                    "1" => egui::Key::Num1,
+                    "2" => egui::Key::Num2,
+                    "3" => egui::Key::Num3,
+                    "4" => egui::Key::Num4,
+                    "Q" => egui::Key::Q,
+                    "W" => egui::Key::W,
+                    "E" => egui::Key::E,
+                    "R" => egui::Key::R,
+                    "A" => egui::Key::A,
+                    "S" => egui::Key::S,
+                    "D" => egui::Key::D,
+                    "F" => egui::Key::F,
+                    "Z" => egui::Key::Z,
+                    "C" => egui::Key::C,
+                    "V" => egui::Key::V,
+                    _ => continue,
+                };
+                inputs[*chip8_key] = i.key_down(key);
             }
         });
         self.emulator.set_input_state(&inputs);
@@ -170,8 +168,33 @@ impl eframe::App for App {
                                 "CHIP-8",
                             );
                             // Future emulators can be added here
-                            // ui.selectable_value(&mut self.selected_emulator, "NES".to_string(), "NES");
+                            // ui.selectable_value(&mut self.selected_emulator, "Game Boy".to_string(), "Game Boy");
                         });
+
+                    ui.separator();
+
+                    // ROM file selector
+                    ui.heading("ROM File");
+                    if ui.button("📁 Load ROM").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("ROM files", &["ch8", "rom"])
+                            .pick_file()
+                        {
+                            match self.emulator.load_rom(&path) {
+                                Ok(_) => {
+                                    self.rom_path = Some(path.clone());
+                                    self.is_paused = false;
+                                    log::info!("Loaded ROM: {:?}", path);
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to load ROM: {}", e);
+                                }
+                            }
+                        }
+                    }
+                    if let Some(path) = &self.rom_path {
+                        ui.label(format!("📄 {}", path.file_name().unwrap_or_default().to_string_lossy()));
+                    }
 
                     ui.separator();
 
@@ -353,10 +376,10 @@ impl eframe::App for App {
                         self.memory_scroll_to = Some(metadata.index_register as usize);
                     }
                     if ui.small_button("Program Start").clicked() {
-                        self.memory_scroll_to = Some(PROGRAM_START_ADDRESS as usize);
+                        self.memory_scroll_to = Some(0x200); // CHIP-8 program start
                     }
                     if ui.small_button("Font Start").clicked() {
-                        self.memory_scroll_to = Some(FONTSET_START_ADDRESS as usize);
+                        self.memory_scroll_to = Some(0x50); // CHIP-8 font start
                     }
                 });
 
@@ -757,16 +780,6 @@ fn main() -> Result<(), eframe::Error> {
     env_logger::init();
     let cli = Cli::parse();
 
-    log::info!("Loading ROM: {}", &cli.file.display());
-    
-    let mut emulator = Chip8Emulator::new();
-    emulator.set_mute(cli.mute);
-    
-    emulator.load_rom(&cli.file).unwrap_or_else(|e| {
-        log::error!("{}", e);
-        std::process::exit(1);
-    });
-
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1400.0, 900.0]) // Larger default for more info panels
@@ -775,10 +788,10 @@ fn main() -> Result<(), eframe::Error> {
         ..Default::default()
     };
 
-    log::info!("Starting gui");
+    log::info!("Starting emulator");
     eframe::run_native(
-        "Chip-8",
+        "Multi-Emulator",
         options,
-        Box::new(|_cc| Ok(Box::new(App::new(Box::new(emulator), cli.cycles)))),
+        Box::new(|_cc| Ok(Box::new(App::new(cli.cycles, cli.mute)))),
     )
 }

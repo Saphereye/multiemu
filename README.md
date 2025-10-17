@@ -1,46 +1,63 @@
-# Chip-8 emulator
-This project is an implementation of an emulator for the [CHIP-8](https://en.wikipedia.org/wiki/CHIP-8) [fantasy video game console](https://en.wikipedia.org/wiki/Fantasy_video_game_console).
+# Multi-Emulator Platform
 
-The project is structured to support multiple emulators in the future through a trait-based architecture.
+A modular emulator platform built with Rust and egui, currently supporting CHIP-8 with plans for more systems.
+
+## Features
+
+- **Modular Architecture**: Trait-based design for easy addition of new emulators
+- **GUI Interface**: Clean UI with file picker, controls, and debugger
+- **Multiple Emulators**:
+  - ✅ CHIP-8 (fully implemented)
+  - 🚧 Game Boy (skeleton, in development)
+
+## How to Run
+
+```bash
+cargo run --release
+```
+
+The application will open with a GUI where you can:
+1. Select an emulator from the dropdown
+2. Load a ROM file using the file picker
+3. Use the controls to run/pause/reset the emulator
+
+### Command-line Options
+
+```bash
+cargo run --release -- [OPTIONS]
+
+Options:
+  -c, --cycles <CYCLES>  Number of CPU instructions per timer update [default: 1]
+  -m, --mute             Enable to mute the beep sound
+  -h, --help             Print help
+```
 
 ## Architecture
 
-The emulator is built with a modular architecture:
-
-- **`emulators/`** - Module containing all emulator implementations
-  - **`mod.rs`** - Defines the `Emulator` trait and `EmuError` enum
-  - **`chip8.rs`** - CHIP-8 emulator implementation
-
-### Emulator Trait
-
-All emulators implement the `Emulator` trait which provides:
-- ROM loading (`load_rom`)
-- Execution control (`step`, `reset`)
-- Timer/audio updates (`update_timers`)
-- Display output (`framebuffer`, `resolution`)
-- Input handling (`set_input_state`)
-- System metadata access (`metadata`)
-
-This design makes it easy to add support for other systems (NES, Game Boy, etc.) in the future.
-
-## How to run
-The program can be run by cloning the repo and creating the executable using:
-```bash
-cargo run --release
+The project uses a trait-based architecture for modularity:
 
 ```
-This will create the executable at ./target/release/chip-8-emulator.
-Use `./chip-8-emulator --help` to know more about the arguments that can be provided.
+src/
+├── emulators/
+│   ├── mod.rs          # Emulator trait and error types
+│   ├── chip8/          # CHIP-8 implementation
+│   │   ├── mod.rs
+│   │   ├── configs.rs
+│   │   └── rand.rs
+│   └── gameboy/        # Game Boy implementation (skeleton)
+│       └── mod.rs
+└── main.rs             # GUI application
+```
 
+### Adding New Emulators
 
-
-## Screenshot
-![image](./assets/screenshot.png)
-
-
-
-More roms can be found [here](https://github.com/dmatlack/chip8/tree/master/roms/games)
+1. Create a new module in `src/emulators/`
+2. Implement the `Emulator` trait
+3. Add to the emulator dropdown in `main.rs`
 
 ## Resources
-- [CHIP 8 Specification](https://www.cs.columbia.edu/~sedwards/classes/2016/4840-spring/designs/Chip8.pdf)
-- [Chip 8 test suite](https://github.com/Timendus/chip8-test-suite)
+
+- [CHIP-8 Specification](https://www.cs.columbia.edu/~sedwards/classes/2016/4840-spring/designs/Chip8.pdf)
+- [CHIP-8 Test Suite](https://github.com/Timendus/chip8-test-suite)
+- [CHIP-8 ROMs](https://github.com/dmatlack/chip8/tree/master/roms/games)
+

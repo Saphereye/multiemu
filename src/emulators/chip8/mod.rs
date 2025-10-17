@@ -1,6 +1,9 @@
+mod configs;
+mod rand;
+
 use super::{EmuError, Emulator};
-use crate::configs::{FONTSET_START_ADDRESS, HEIGHT, PROGRAM_START_ADDRESS, WIDTH};
-use crate::rand::Lcg;
+use configs::{FONTSET_START_ADDRESS, HEIGHT, PROGRAM_START_ADDRESS, WIDTH};
+use rand::Lcg;
 use raplay::{source::Sine, Sink};
 use std::fs::File;
 use std::io::Read;
@@ -522,6 +525,27 @@ impl Emulator for Chip8Emulator {
 
     fn set_input_state(&mut self, inputs: &[bool]) {
         self.input_keys.copy_from_slice(&inputs[0..16.min(inputs.len())]);
+    }
+
+    fn keymap(&self) -> Vec<(usize, String)> {
+        vec![
+            (0x0, "X".to_string()),
+            (0x1, "1".to_string()),
+            (0x2, "2".to_string()),
+            (0x3, "3".to_string()),
+            (0x4, "Q".to_string()),
+            (0x5, "W".to_string()),
+            (0x6, "E".to_string()),
+            (0x7, "A".to_string()),
+            (0x8, "S".to_string()),
+            (0x9, "D".to_string()),
+            (0xA, "Z".to_string()),
+            (0xB, "C".to_string()),
+            (0xC, "4".to_string()),
+            (0xD, "R".to_string()),
+            (0xE, "F".to_string()),
+            (0xF, "V".to_string()),
+        ]
     }
 
     fn metadata(&self) -> Self::Metadata {
