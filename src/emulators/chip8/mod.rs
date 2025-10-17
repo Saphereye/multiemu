@@ -459,6 +459,7 @@ impl Emulator for Chip8Emulator {
     }
 
     fn load_rom(&mut self, path: &Path) -> Result<(), EmuError> {
+        self.reset();
         let mut file = File::open(path).map_err(|e| EmuError::RomIoError {
             rom: path.to_path_buf(),
             source: e,
