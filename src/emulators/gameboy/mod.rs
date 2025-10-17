@@ -1710,10 +1710,20 @@ impl Emulator for GameBoyEmulator {
 
     fn set_input_state(&mut self, inputs: &[bool]) {
         if inputs.len() >= 8 {
+            // Check if any button state changed from not pressed to pressed
+            let any_new_press = inputs.iter().enumerate()
+                .any(|(i, &pressed)| pressed && !self.input_keys[i]);
+            
             self.input_keys.copy_from_slice(&inputs[0..8]);
+            
             // Wake from HALT/STOP on any button press
-            if inputs.iter().any(|&pressed| pressed) {
+            if any_new_press {
                 self.halted = false;
+                log::info!("Button pressed - waking from HALT. Buttons: {:?}", inputs);
+                
+                // Request joypad interrupt (IF register bit 4)
+                let if_reg = self.read_byte(0xFF0F);
+                self.write_byte(0xFF0F, if_reg | 0x10);
             }
         }
     }
