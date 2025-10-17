@@ -1,17 +1,16 @@
 use clap::Parser;
 use eframe::egui;
 use egui::Key;
-use std::fs::File;
-use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 mod configs;
-mod cpu;
+mod emulators;
 mod rand;
 
 use configs::{FONTSET_START_ADDRESS, HEIGHT, PROGRAM_START_ADDRESS, WIDTH};
-use cpu::Cpu;
+use emulators::chip8::{Chip8Emulator, Chip8Metadata};
+use emulators::Emulator;
 
 const KEY_MAP: [(usize, Key); 16] = [
     (0x0, Key::X),
@@ -32,26 +31,7 @@ const KEY_MAP: [(usize, Key); 16] = [
     (0xF, Key::V),
 ];
 
-fn load_rom(file_path: &Path) -> std::io::Result<Cpu> {
-    let mut cpu = Cpu::new();
-    let mut file = File::open(file_path)?; // propagate open errors
 
-    let rom_space = &mut cpu.memory[PROGRAM_START_ADDRESS as usize..];
-
-    // read returns Result<usize, io::Error>; '?' propagates any error automatically
-    let n = file.read(rom_space)?;
-
-    // check if the ROM is too large
-    if n > rom_space.len() {
-        log::error!(
-            "Inputs file is larger than {} bytes.",
-            rom_space.len()
-        );
-        std::process::exit(1);
-    }
-
-    Ok(cpu)
-}
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -69,50 +49,56 @@ struct Cli {
 }
 
 pub struct App {
-    cpu: Cpu,
+    emulator: Box<dyn Emulator<Metadata = Chip8Metadata>>,
     cycles: u64,
     texture: Option<egui::TextureHandle>,
     last_timer_update: Instant,
     timer_period: Duration,
     memory_scroll_to: Option<usize>,
     is_paused: bool,
+    selected_emulator: String,
 }
 
 impl App {
-    fn new(cpu: Cpu, cycles: u64) -> Self {
+    fn new(emulator: Box<dyn Emulator<Metadata = Chip8Metadata>>, cycles: u64) -> Self {
         Self {
-            cpu,
+            emulator,
             cycles,
             texture: None,
             last_timer_update: Instant::now(),
             timer_period: Duration::from_nanos(16_666_667), // ~60Hz
             memory_scroll_to: None,
             is_paused: false,
+            selected_emulator: "CHIP-8".to_string(),
         }
     }
 
     fn update_texture(&mut self, ctx: &egui::Context) {
-        let rgba: Vec<u8> = self
-            .cpu
-            .buffer
+        let (width, height) = self.emulator.resolution();
+        let framebuffer = self.emulator.framebuffer();
+
+        let rgba: Vec<u8> = framebuffer
             .iter()
-            .flat_map(|&b| {
-                if b {
-                    [255, 255, 255, 255] // white
-                } else {
-                    [0, 0, 0, 255] // black
-                }
+            .flat_map(|&argb| {
+                let a = ((argb >> 24) & 0xFF) as u8;
+                let r = ((argb >> 16) & 0xFF) as u8;
+                let g = ((argb >> 8) & 0xFF) as u8;
+                let b = (argb & 0xFF) as u8;
+                [r, g, b, a]
             })
             .collect();
 
-        let size = [WIDTH, HEIGHT];
+        let size = [width, height];
         let image = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
 
         if let Some(tex) = &mut self.texture {
             tex.set(image, egui::TextureOptions::NEAREST);
         } else {
-            self.texture =
-                Some(ctx.load_texture("chip8_screen", image, egui::TextureOptions::NEAREST));
+            self.texture = Some(ctx.load_texture(
+                &format!("{}_screen", self.emulator.system_name()),
+                image,
+                egui::TextureOptions::NEAREST,
+            ));
         }
     }
 }
@@ -128,17 +114,20 @@ impl eframe::App for App {
         }
 
         // --- Keyboard input ---
+        let mut inputs = [false; 16];
         ctx.input(|i| {
             for (chip8_key, egui_key) in KEY_MAP {
-                self.cpu.input_keys[chip8_key] = i.key_down(egui_key);
+                inputs[chip8_key] = i.key_down(egui_key);
             }
         });
+        self.emulator.set_input_state(&inputs);
 
         // --- Timers ---
         if !self.is_paused {
             let now = Instant::now();
-            if now.duration_since(self.last_timer_update) >= self.timer_period {
-                self.cpu.update_timers();
+            let elapsed = now.duration_since(self.last_timer_update);
+            if elapsed >= self.timer_period {
+                self.emulator.update_timers(elapsed);
                 self.last_timer_update = now;
             }
         }
@@ -146,7 +135,7 @@ impl eframe::App for App {
         // --- Execute instructions (only if not paused) ---
         if !self.is_paused {
             for _ in 0..self.cycles {
-                self.cpu.execute_instruction().unwrap_or_else(|e| {
+                self.emulator.step().unwrap_or_else(|e| {
                     log::error!("{}", e);
                     std::process::exit(1);
                 });
@@ -170,6 +159,22 @@ impl eframe::App for App {
             .width_range(0.0..=220.0)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
+                    // Emulator selector dropdown
+                    ui.heading("Emulator");
+                    egui::ComboBox::from_label("")
+                        .selected_text(&self.selected_emulator)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.selected_emulator,
+                                "CHIP-8".to_string(),
+                                "CHIP-8",
+                            );
+                            // Future emulators can be added here
+                            // ui.selectable_value(&mut self.selected_emulator, "NES".to_string(), "NES");
+                        });
+
+                    ui.separator();
+
                     // Control buttons
                     ui.heading("Controls");
                     ui.horizontal_wrapped(|ui| {
@@ -184,14 +189,7 @@ impl eframe::App for App {
                             self.is_paused = !self.is_paused;
                         }
                         if ui.button("⏹ Reset").clicked() {
-                            // Reset CPU state
-                            self.cpu.program_counter = PROGRAM_START_ADDRESS;
-                            self.cpu.index_register = 0;
-                            self.cpu.stack_pointer = 0;
-                            self.cpu.delay_timer = 0;
-                            self.cpu.sound_timer = 0;
-                            self.cpu.registers = [0; 16];
-                            self.cpu.buffer = [false; WIDTH * HEIGHT];
+                            self.emulator.reset();
                             self.is_paused = true;
                         }
                     });
@@ -214,11 +212,12 @@ impl eframe::App for App {
 
                     // Compact registers in 4 columns with larger font
                     ui.heading("Registers");
+                    let metadata = self.emulator.metadata();
                     egui::Grid::new("registers_grid")
                         .num_columns(4)
                         .spacing([8.0, 2.0])
                         .show(ui, |ui| {
-                            for (i, reg) in self.cpu.registers.iter().enumerate() {
+                            for (i, reg) in metadata.registers.iter().enumerate() {
                                 ui.label(
                                     egui::RichText::new(format!("V{:X}:{:02X}", i, reg))
                                         .size(14.0)
@@ -238,34 +237,34 @@ impl eframe::App for App {
                         .spacing([8.0, 2.0])
                         .show(ui, |ui| {
                             ui.label(
-                                egui::RichText::new(format!("I:{:04X}", self.cpu.index_register))
+                                egui::RichText::new(format!("I:{:04X}", metadata.index_register))
                                     .size(14.0)
                                     .monospace(),
                             );
                             ui.label(
-                                egui::RichText::new(format!("PC:{:04X}", self.cpu.program_counter))
-                                    .size(14.0)
-                                    .monospace(),
-                            );
-                            ui.end_row();
-                            ui.label(
-                                egui::RichText::new(format!("SP:{}", self.cpu.stack_pointer))
-                                    .size(14.0)
-                                    .monospace(),
-                            );
-                            ui.label(
-                                egui::RichText::new(format!("OP:{:04X}", self.cpu.current_opcode))
+                                egui::RichText::new(format!("PC:{:04X}", metadata.program_counter))
                                     .size(14.0)
                                     .monospace(),
                             );
                             ui.end_row();
                             ui.label(
-                                egui::RichText::new(format!("DT:{}", self.cpu.delay_timer))
+                                egui::RichText::new(format!("SP:{}", metadata.stack_pointer))
                                     .size(14.0)
                                     .monospace(),
                             );
                             ui.label(
-                                egui::RichText::new(format!("ST:{}", self.cpu.sound_timer))
+                                egui::RichText::new(format!("OP:{:04X}", metadata.current_opcode))
+                                    .size(14.0)
+                                    .monospace(),
+                            );
+                            ui.end_row();
+                            ui.label(
+                                egui::RichText::new(format!("DT:{}", metadata.delay_timer))
+                                    .size(14.0)
+                                    .monospace(),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("ST:{}", metadata.sound_timer))
                                     .size(14.0)
                                     .monospace(),
                             );
@@ -287,7 +286,7 @@ impl eframe::App for App {
                     for row in keys {
                         ui.horizontal(|ui| {
                             for &k in &row {
-                                let pressed = self.cpu.input_keys[k];
+                                let pressed = inputs[k];
                                 let button = egui::Button::new(format!("{:X}", k))
                                     .min_size(egui::vec2(button_size, button_size));
                                 if pressed {
@@ -306,15 +305,16 @@ impl eframe::App for App {
                     ui.separator();
                     ui.heading("Stack");
 
-                    if self.cpu.stack_pointer == 0 {
+                    let metadata = self.emulator.metadata();
+                    if metadata.stack_pointer == 0 {
                         ui.label("Empty");
                     } else {
                         // Stack visualization as a vertical list for better readability
                         ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
 
-                        for i in (0..self.cpu.stack_pointer).rev() {
-                            if (i as usize) < self.cpu.stack.len() {
-                                let color = if i == self.cpu.stack_pointer - 1 {
+                        for i in (0..metadata.stack_pointer).rev() {
+                            if (i as usize) < metadata.stack.len() {
+                                let color = if i == metadata.stack_pointer - 1 {
                                     egui::Color32::YELLOW
                                 } else {
                                     egui::Color32::WHITE
@@ -323,7 +323,7 @@ impl eframe::App for App {
                                     ui.colored_label(color, format!("[{}]", i));
                                     ui.colored_label(
                                         color,
-                                        format!("0x{:04X}", self.cpu.stack[i as usize]),
+                                        format!("0x{:04X}", metadata.stack[i as usize]),
                                     );
                                 });
                             }
@@ -342,13 +342,15 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 ui.heading("Memory");
 
+                let metadata = self.emulator.metadata();
+
                 // Navigation controls
                 ui.horizontal_wrapped(|ui| {
                     if ui.small_button("Program Counter").clicked() {
-                        self.memory_scroll_to = Some(self.cpu.program_counter as usize);
+                        self.memory_scroll_to = Some(metadata.program_counter as usize);
                     }
                     if ui.small_button("Index Register").clicked() {
-                        self.memory_scroll_to = Some(self.cpu.index_register as usize);
+                        self.memory_scroll_to = Some(metadata.index_register as usize);
                     }
                     if ui.small_button("Program Start").clicked() {
                         self.memory_scroll_to = Some(PROGRAM_START_ADDRESS as usize);
@@ -372,15 +374,15 @@ impl eframe::App for App {
                 scroll_area.show(ui, |ui| {
                     ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
 
-                    for (addr, chunk) in self.cpu.memory.chunks(16).enumerate() {
+                    for (addr, chunk) in metadata.memory.chunks(16).enumerate() {
                         let base_addr = addr * 16;
 
                         ui.horizontal(|ui| {
                             // Address
-                            let addr_color = if base_addr == self.cpu.program_counter as usize {
+                            let addr_color = if base_addr == metadata.program_counter as usize {
                                 egui::Color32::YELLOW
-                            } else if base_addr <= self.cpu.index_register as usize
-                                && (self.cpu.index_register as usize) < base_addr + 16
+                            } else if base_addr <= metadata.index_register as usize
+                                && (metadata.index_register as usize) < base_addr + 16
                             {
                                 egui::Color32::LIGHT_BLUE
                             } else {
@@ -392,9 +394,9 @@ impl eframe::App for App {
                             // Hex bytes
                             for (i, &byte) in chunk.iter().enumerate() {
                                 let byte_addr = base_addr + i;
-                                let color = if byte_addr == self.cpu.program_counter as usize {
+                                let color = if byte_addr == metadata.program_counter as usize {
                                     egui::Color32::YELLOW
-                                } else if byte_addr == self.cpu.index_register as usize {
+                                } else if byte_addr == metadata.index_register as usize {
                                     egui::Color32::LIGHT_BLUE
                                 } else if byte != 0 {
                                     egui::Color32::WHITE
@@ -419,20 +421,22 @@ impl eframe::App for App {
                     ui.heading("Instructions");
                 });
 
+                let metadata = self.emulator.metadata();
+
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
 
                         // Show more instructions around PC for better context
-                        let pc = self.cpu.program_counter as usize;
+                        let pc = metadata.program_counter as usize;
                         let start = pc.saturating_sub(20) & !1; // Align to even address
-                        let end = (pc + 40).min(self.cpu.memory.len() - 1) & !1;
+                        let end = (pc + 40).min(metadata.memory.len() - 1) & !1;
 
                         for addr in (start..end).step_by(2) {
-                            if addr + 1 < self.cpu.memory.len() {
-                                let opcode = ((self.cpu.memory[addr] as u16) << 8)
-                                    | (self.cpu.memory[addr + 1] as u16);
+                            if addr + 1 < metadata.memory.len() {
+                                let opcode = ((metadata.memory[addr] as u16) << 8)
+                                    | (metadata.memory[addr + 1] as u16);
 
                                 ui.horizontal(|ui| {
                                     let is_current = addr == pc;
@@ -756,11 +760,14 @@ fn main() -> Result<(), eframe::Error> {
     let cli = Cli::parse();
 
     log::info!("Loading ROM: {}", &cli.file.display());
-    let mut cpu = load_rom(&cli.file).unwrap_or_else(|e| {
+    
+    let mut emulator = Chip8Emulator::new();
+    emulator.set_mute(cli.mute);
+    
+    emulator.load_rom(&cli.file).unwrap_or_else(|e| {
         log::error!("{}", e);
         std::process::exit(1);
     });
-    cpu.is_mute = cli.mute;
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -774,6 +781,6 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "Chip-8",
         options,
-        Box::new(|_cc| Ok(Box::new(App::new(cpu, cli.cycles)))),
+        Box::new(|_cc| Ok(Box::new(App::new(Box::new(emulator), cli.cycles)))),
     )
 }
