@@ -184,8 +184,9 @@ impl eframe::App for App {
         let mut inputs = [false; 16];
         let keymap = self.emulator.keymap();
         ctx.input(|i| {
-            for (chip8_key, key_str) in &keymap {
+            for (key_index, key_str) in &keymap {
                 let key = match key_str.as_str() {
+                    // CHIP-8 keys
                     "X" => egui::Key::X,
                     "1" => egui::Key::Num1,
                     "2" => egui::Key::Num2,
@@ -202,9 +203,20 @@ impl eframe::App for App {
                     "Z" => egui::Key::Z,
                     "C" => egui::Key::C,
                     "V" => egui::Key::V,
+                    // Game Boy keys
+                    "Up" => egui::Key::ArrowUp,
+                    "Down" => egui::Key::ArrowDown,
+                    "Left" => egui::Key::ArrowLeft,
+                    "Right" => egui::Key::ArrowRight,
+                    "Return" => egui::Key::Enter,
+                    "RShift" => {
+                        // Check for shift modifier
+                        inputs[*key_index] = i.modifiers.shift;
+                        continue;
+                    },
                     _ => continue,
                 };
-                inputs[*chip8_key] = i.key_down(key);
+                inputs[*key_index] = i.key_down(key);
             }
         });
         self.emulator.set_input_state(&inputs);

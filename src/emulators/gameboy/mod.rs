@@ -46,6 +46,7 @@ pub struct GameBoyEmulator {
     input_keys: [bool; 8],    // 8 buttons
     rom_loaded: bool,
     cycles: u64,              // CPU cycle counter
+    halted: bool,             // CPU halted state
     // Simple tile-based rendering for POC
     vram: [u8; 0x2000],       // 8KB Video RAM
     oam: [u8; 0xA0],          // Object Attribute Memory (sprites)
@@ -64,6 +65,7 @@ impl GameBoyEmulator {
             input_keys: [false; 8],
             rom_loaded: false,
             cycles: 0,
+            halted: false,
             vram: [0; 0x2000],
             oam: [0; 0xA0],
         }
@@ -475,6 +477,13 @@ impl GameBoyEmulator {
             return Ok(4);
         }
 
+        // If halted, don't execute instructions until an interrupt occurs
+        // For now, we'll use spin_loop to indicate we're waiting
+        if self.halted {
+            std::hint::spin_loop();
+            return Ok(4);
+        }
+
         self.current_opcode = self.read_byte(self.pc);
         let opcode = self.current_opcode;
         self.pc = self.pc.wrapping_add(1);
@@ -587,7 +596,12 @@ impl GameBoyEmulator {
             },
             
             //  STOP
+            // STOP
             0x10 => {
+                // STOP halts CPU and LCD until button press
+                // Using spin_loop as we're in a low-power state
+                self.halted = true;
+                std::hint::spin_loop();
                 cycles = 4;
             },
             
@@ -940,7 +954,8 @@ impl GameBoyEmulator {
                 
                 // HALT is 0x76
                 cycles = if opcode == 0x76 {
-                    // HALT - for now, just continue
+                    // HALT - enter low power mode until interrupt
+                    self.halted = true;
                     4
                 } else if from == 6 {
                     // LD r, (HL)
@@ -1439,6 +1454,8 @@ impl GameBoyEmulator {
             // EI
             0xFB => {
                 self.ime = true;
+                // Wake from HALT when interrupts are enabled
+                self.halted = false;
                 cycles = 4;
             },
             
@@ -1512,6 +1529,8 @@ impl Emulator for GameBoyEmulator {
         self.rom_loaded = true;
         
         log::info!("Loaded Game Boy ROM: {} bytes", rom_data.len());
+        log::info!("PC initialized to: 0x{:04X}", self.pc);
+        log::info!("First opcode at PC: 0x{:02X}", self.memory[self.pc as usize]);
         Ok(())
     }
 
@@ -1530,6 +1549,7 @@ impl Emulator for GameBoyEmulator {
         self.pc = 0x0100;
         self.ime = true;
         self.cycles = 0;
+        self.halted = false;
         
         // Clear VRAM and framebuffer
         self.vram = [0; 0x2000];
@@ -1565,6 +1585,10 @@ impl Emulator for GameBoyEmulator {
     fn set_input_state(&mut self, inputs: &[bool]) {
         if inputs.len() >= 8 {
             self.input_keys.copy_from_slice(&inputs[0..8]);
+            // Wake from HALT/STOP on any button press
+            if inputs.iter().any(|&pressed| pressed) {
+                self.halted = false;
+            }
         }
     }
 
