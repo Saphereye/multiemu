@@ -95,6 +95,7 @@ impl EmulatorType {
 pub struct App {
     emulator: EmulatorType,
     cycles: u64,
+    speed_multiplier: f32, // Speed multiplier for emulation (0.1x to 10x)
     texture: Option<egui::TextureHandle>,
     last_timer_update: Instant,
     timer_period: Duration,
@@ -112,6 +113,7 @@ impl App {
         Self {
             emulator: EmulatorType::Chip8(Box::new(emulator)),
             cycles,
+            speed_multiplier: 1.0, // Default 1x speed
             texture: None,
             last_timer_update: Instant::now(),
             timer_period: Duration::from_nanos(16_666_667), // ~60Hz
@@ -233,7 +235,17 @@ impl eframe::App for App {
 
         // --- Execute instructions (only if not paused) ---
         if !self.is_paused {
-            for _ in 0..self.cycles {
+            // Calculate actual cycles to execute based on speed multiplier
+            let cycles_to_execute = match &self.emulator {
+                EmulatorType::Chip8(_) => self.cycles, // CHIP-8 uses cycles directly
+                EmulatorType::GameBoy(_) => {
+                    // Game Boy: ~70224 cycles per frame at 60Hz (~4.19 MHz)
+                    // Apply speed multiplier
+                    (70224.0 * self.speed_multiplier) as u64
+                }
+            };
+            
+            for _ in 0..cycles_to_execute {
                 self.emulator.step().unwrap_or_else(|e| {
                     log::error!("{}", e);
                     std::process::exit(1);
@@ -336,15 +348,30 @@ impl eframe::App for App {
 
                     // Speed control with slider
                     ui.label("Speed:");
-                    let mut speed = self.cycles as f32;
-                    ui.add(
-                        egui::Slider::new(&mut speed, 1.0..=1000.0)
-                            .logarithmic(true)
-                            .text("cycles")
-                            .show_value(true),
-                    );
-                    self.cycles = speed as u64;
-                    ui.small(format!("{}x speed", self.cycles));
+                    match &self.emulator {
+                        EmulatorType::Chip8(_) => {
+                            // CHIP-8: cycles per timer update
+                            let mut speed = self.cycles as f32;
+                            ui.add(
+                                egui::Slider::new(&mut speed, 1.0..=1000.0)
+                                    .logarithmic(true)
+                                    .text("cycles")
+                                    .show_value(true),
+                            );
+                            self.cycles = speed as u64;
+                            ui.small(format!("{}x speed", self.cycles));
+                        }
+                        EmulatorType::GameBoy(_) => {
+                            // Game Boy: speed multiplier (0.1x to 10x)
+                            ui.add(
+                                egui::Slider::new(&mut self.speed_multiplier, 0.1..=10.0)
+                                    .logarithmic(true)
+                                    .text("speed")
+                                    .show_value(true),
+                            );
+                            ui.small(format!("{:.1}x speed", self.speed_multiplier));
+                        }
+                    }
 
                     ui.separator();
 

@@ -2,8 +2,6 @@ use super::{EmuError, Emulator};
 use std::path::Path;
 use std::time::Duration;
 
-mod opcodes;
-
 const WIDTH: usize = 160;
 const HEIGHT: usize = 144;
 
@@ -478,9 +476,8 @@ impl GameBoyEmulator {
         }
 
         // If halted, don't execute instructions until an interrupt occurs
-        // For now, we'll use spin_loop to indicate we're waiting
+        // Just return immediately without spinning to avoid freezing
         if self.halted {
-            std::hint::spin_loop();
             return Ok(4);
         }
 
@@ -597,11 +594,10 @@ impl GameBoyEmulator {
             
             //  STOP
             // STOP
+            // STOP
             0x10 => {
                 // STOP halts CPU and LCD until button press
-                // Using spin_loop as we're in a low-power state
                 self.halted = true;
-                std::hint::spin_loop();
                 cycles = 4;
             },
             
@@ -1530,7 +1526,12 @@ impl Emulator for GameBoyEmulator {
         
         log::info!("Loaded Game Boy ROM: {} bytes", rom_data.len());
         log::info!("PC initialized to: 0x{:04X}", self.pc);
-        log::info!("First opcode at PC: 0x{:02X}", self.memory[self.pc as usize]);
+        log::info!("First 16 bytes at PC:");
+        for i in 0..16 {
+            log::info!("  0x{:04X}: 0x{:02X}", self.pc as usize + i, self.memory[self.pc as usize + i]);
+        }
+        log::info!("Halted state: {}", self.halted);
+        log::info!("IME: {}", self.ime);
         Ok(())
     }
 
