@@ -68,9 +68,10 @@ impl Chip8Emulator {
             ..(FONTSET_START_ADDRESS + FONT_SET.len() as u16) as usize]
             .copy_from_slice(&FONT_SET);
 
+        // Try to initialize audio, but don't fail if it's not available
         let mut sink = Sink::default();
         let src = Sine::new(440.0);
-        sink.load(Box::new(src), false).unwrap();
+        let _ = sink.load(Box::new(src), false); // Ignore errors
 
         Self {
             registers: [0; 16],
@@ -503,11 +504,11 @@ impl Emulator for Chip8Emulator {
 
         if self.sound_timer > 0 {
             if !self.is_mute {
-                self.audio.play(true).unwrap();
+                let _ = self.audio.play(true); // Ignore errors
             }
             self.sound_timer -= 1;
         } else if !self.is_mute {
-            self.audio.pause().unwrap();
+            let _ = self.audio.pause(); // Ignore errors
         }
     }
 
