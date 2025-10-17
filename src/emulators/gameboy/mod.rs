@@ -175,19 +175,23 @@ impl GameBoyEmulator {
         // Real implementation would decode tiles and tilemaps
         for y in 0..HEIGHT {
             for x in 0..WIDTH {
-                let tile_x = x / 8;
-                let tile_y = y / 8;
-                let tile_index = (tile_y * 20 + tile_x) % 0x2000;
+                // Calculate VRAM byte index based on screen position
+                let byte_index = (y * WIDTH + x) / 8;
+                let bit_index = 7 - ((y * WIDTH + x) % 8);
                 
-                // Simple pattern based on VRAM content
-                let pixel_on = (self.vram[tile_index] & (1 << (x % 8))) != 0;
-                let color = if pixel_on {
-                    0xFF0F380F // Dark green
+                if byte_index < self.vram.len() {
+                    // Check if the bit is set in VRAM
+                    let pixel_on = (self.vram[byte_index] & (1 << bit_index)) != 0;
+                    let color = if pixel_on {
+                        0xFF0F380F // Dark green
+                    } else {
+                        0xFF9BBC0F // Light green
+                    };
+                    self.framebuffer[y * WIDTH + x] = color;
                 } else {
-                    0xFF9BBC0F // Light green
-                };
-                
-                self.framebuffer[y * WIDTH + x] = color;
+                    // Beyond VRAM, show light green
+                    self.framebuffer[y * WIDTH + x] = 0xFF9BBC0F;
+                }
             }
         }
     }
@@ -1560,10 +1564,14 @@ impl Emulator for GameBoyEmulator {
     }
 
     fn step(&mut self) -> Result<(), EmuError> {
+        let cycles_before = self.cycles;
         self.execute_instruction()?;
         
         // Update display every ~70224 cycles (one frame at 60Hz)
-        if self.cycles % 70224 < 4 {
+        // Check if we crossed a frame boundary
+        let frame_before = cycles_before / 70224;
+        let frame_after = self.cycles / 70224;
+        if frame_after > frame_before {
             self.render_background();
         }
         
