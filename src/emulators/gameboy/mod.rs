@@ -52,7 +52,7 @@ pub struct GameBoyEmulator {
 
 impl GameBoyEmulator {
     pub fn new() -> Self {
-        Self {
+        let mut emulator = Self {
             registers: [0; 8],
             sp: 0xFFFE,
             pc: 0x0100,
@@ -66,7 +66,17 @@ impl GameBoyEmulator {
             halted: false,
             vram: [0; 0x2000],
             oam: [0; 0xA0],
-        }
+        };
+        
+        // Initialize LCD control registers to power-up values
+        emulator.write_byte(0xFF40, 0x91); // LCDC - LCD on, BG on
+        emulator.write_byte(0xFF42, 0x00); // SCY - Scroll Y
+        emulator.write_byte(0xFF43, 0x00); // SCX - Scroll X
+        emulator.write_byte(0xFF47, 0xFC); // BGP - Background palette
+        emulator.write_byte(0xFF48, 0xFF); // OBP0
+        emulator.write_byte(0xFF49, 0xFF); // OBP1
+        
+        emulator
     }
 
     // Helper functions for 16-bit register pairs
@@ -171,28 +181,93 @@ impl GameBoyEmulator {
 
     // Simple tile rendering for POC
     fn render_background(&mut self) {
-        // For POC, just render a simple test pattern based on VRAM
-        // Real implementation would decode tiles and tilemaps
+        // Read LCD Control register (LCDC) at 0xFF40
+        let lcdc = self.read_byte(0xFF40);
+        
+        // Bit 0: BG/Window Display (0=Off, 1=On)
+        let bg_display = (lcdc & 0x01) != 0;
+        
+        // Bit 3: BG Tile Map Display Select (0=9800-9BFF, 1=9C00-9FFF)
+        let bg_tilemap_base: u16 = if (lcdc & 0x08) != 0 { 0x9C00 } else { 0x9800 };
+        
+        // Bit 4: BG & Window Tile Data Select (0=8800-97FF, 1=8000-8FFF)
+        let tile_data_signed = (lcdc & 0x10) == 0;
+        
+        // Read palette register (BGP) at 0xFF47
+        let bgp = self.read_byte(0xFF47);
+        let palette = [
+            self.get_color((bgp >> 0) & 0x03),
+            self.get_color((bgp >> 2) & 0x03),
+            self.get_color((bgp >> 4) & 0x03),
+            self.get_color((bgp >> 6) & 0x03),
+        ];
+        
+        // Read scroll registers
+        let scy = self.read_byte(0xFF42); // Scroll Y
+        let scx = self.read_byte(0xFF43); // Scroll X
+        
+        if !bg_display {
+            // Background disabled - fill with palette color 0 (white/lightest)
+            for pixel in self.framebuffer.iter_mut() {
+                *pixel = palette[0];
+            }
+            return;
+        }
+        
+        // Render each pixel of the 160x144 display
         for y in 0..HEIGHT {
             for x in 0..WIDTH {
-                // Calculate VRAM byte index based on screen position
-                let byte_index = (y * WIDTH + x) / 8;
-                let bit_index = 7 - ((y * WIDTH + x) % 8);
+                // Calculate position in background map with scrolling
+                let bg_y = ((y as u8).wrapping_add(scy)) as usize;
+                let bg_x = ((x as u8).wrapping_add(scx)) as usize;
                 
-                if byte_index < self.vram.len() {
-                    // Check if the bit is set in VRAM
-                    let pixel_on = (self.vram[byte_index] & (1 << bit_index)) != 0;
-                    let color = if pixel_on {
-                        0xFF0F380F // Dark green
-                    } else {
-                        0xFF9BBC0F // Light green
-                    };
-                    self.framebuffer[y * WIDTH + x] = color;
+                // Which tile (8x8) does this pixel belong to?
+                let tile_y = bg_y / 8;
+                let tile_x = bg_x / 8;
+                
+                // Position within the tile (0-7)
+                let pixel_y = bg_y % 8;
+                let pixel_x = bg_x % 8;
+                
+                // Read tile index from background tilemap
+                let tilemap_addr = bg_tilemap_base + ((tile_y % 32) * 32 + (tile_x % 32)) as u16;
+                let tile_index = self.read_byte(tilemap_addr);
+                
+                // Calculate tile data address
+                let tile_addr = if tile_data_signed {
+                    // Signed addressing: 0x8800 + (tile_index as i8 as i16 + 128) * 16
+                    let signed_index = tile_index as i8 as i16 + 128;
+                    (0x8800u16).wrapping_add((signed_index * 16) as u16)
                 } else {
-                    // Beyond VRAM, show light green
-                    self.framebuffer[y * WIDTH + x] = 0xFF9BBC0F;
-                }
+                    // Unsigned addressing: 0x8000 + tile_index * 16
+                    0x8000 + (tile_index as u16 * 16)
+                };
+                
+                // Each tile is 16 bytes (2 bytes per row)
+                let line_addr = tile_addr + (pixel_y as u16 * 2);
+                let byte1 = self.read_byte(line_addr);
+                let byte2 = self.read_byte(line_addr + 1);
+                
+                // Get the 2-bit color value for this pixel
+                let bit_index = 7 - pixel_x;
+                let color_bit_0 = (byte1 >> bit_index) & 1;
+                let color_bit_1 = (byte2 >> bit_index) & 1;
+                let color_value = (color_bit_1 << 1) | color_bit_0;
+                
+                // Map through palette
+                self.framebuffer[y * WIDTH + x] = palette[color_value as usize];
             }
+        }
+    }
+    
+    // Convert 2-bit Game Boy color to RGB32
+    fn get_color(&self, shade: u8) -> u32 {
+        match shade & 0x03 {
+            0 => 0xFF9BBC0F, // Lightest green
+            1 => 0xFF8BAC0F, // Light green
+            2 => 0xFF306230, // Dark green
+            3 => 0xFF0F380F, // Darkest green
+            _ => 0xFF9BBC0F,
         }
     }
 
@@ -1559,6 +1634,14 @@ impl Emulator for GameBoyEmulator {
         // Clear VRAM and framebuffer
         self.vram = [0; 0x2000];
         self.framebuffer = [0xFF9BBC0F; WIDTH * HEIGHT];
+        
+        // Initialize LCD control registers to power-up values
+        self.write_byte(0xFF40, 0x91); // LCDC - LCD on, BG on, use tilemap 0x9800, tile data 0x8000
+        self.write_byte(0xFF42, 0x00); // SCY - Scroll Y
+        self.write_byte(0xFF43, 0x00); // SCX - Scroll X
+        self.write_byte(0xFF47, 0xFC); // BGP - Background palette (11 11 10 00 - darkest to lightest)
+        self.write_byte(0xFF48, 0xFF); // OBP0 - Object palette 0
+        self.write_byte(0xFF49, 0xFF); // OBP1 - Object palette 1
         
         // Don't clear ROM area of memory
     }
